@@ -67,6 +67,7 @@ async fn run_inner(command: Command) -> anyhow::Result<()> {
             let account = flatten(client.account().await)?;
             print_account(&account);
         }
+        Command::Register => run_register().await?,
 
         Command::Connect => {
             // Pass our session so the manager can configure this user's system
@@ -259,6 +260,39 @@ async fn run_inner(command: Command) -> anyhow::Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+/// The proof-of-work puzzle is solved inside the query engine (not here), so
+/// registration is started remotely and its progress polled.
+async fn run_register() -> anyhow::Result<()> {
+    let engine = platform::engine_control(platform::EngineRole::Query);
+    let idx = engine
+        .start_registration()
+        .await
+        .map_err(|e| anyhow::anyhow!("could not reach the query engine: {e}"))?
+        .map_err(|e| anyhow::anyhow!("could not start registration: {e}"))?;
+    println!("Solving proof-of-work puzzle (this can take a minute)…");
+    let secret = loop {
+        let prog = engine
+            .poll_registration(idx)
+            .await
+            .map_err(|e| anyhow::anyhow!("could not reach the query engine: {e}"))?
+            .map_err(|e| anyhow::anyhow!("could not poll registration: {e}"))?;
+        print!("\rprogress: {:>5.1}%", prog.progress * 100.0);
+        std::io::Write::flush(&mut std::io::stdout())?;
+        if let Some(secret) = prog.secret {
+            println!();
+            break secret;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    };
+    println!("Account registered. Your secret (SAVE IT — it is the only way to access this account):");
+    println!("  {secret}");
+    let client = manager_client();
+    let account = flatten(client.login(secret).await)?;
+    println!("Logged in.");
+    print_account(&account);
     Ok(())
 }
 

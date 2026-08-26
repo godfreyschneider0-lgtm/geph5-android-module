@@ -31,6 +31,9 @@ pub enum Command {
     Logout,
     /// Show account information.
     Account,
+    /// Register a new free account by solving a proof-of-work puzzle, then
+    /// log in with the resulting secret.
+    Register,
 
     /// Bring the tunnel up.
     Connect,
