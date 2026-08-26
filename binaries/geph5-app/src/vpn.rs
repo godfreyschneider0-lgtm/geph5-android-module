@@ -4,21 +4,21 @@ use anyhow::Context as _;
 
 use crate::platform::{ChildTransport, PacketMode};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use linux as backend;
 #[cfg(target_os = "macos")]
 use macos as backend;
 #[cfg(target_os = "windows")]
 use windows as backend;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "windows")))]
 compile_error!("geph5-app supports only Linux, macOS, and Windows");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,10 +68,10 @@ impl Vpn {
         allow_lan: bool,
         service_user: Option<(u32, u32)>,
     ) -> anyhow::Result<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         let _ = allow_lan;
         if let Some(handle) = self.handle.as_mut() {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             {
                 let (uid, _) = service_user.context("Linux VPN requires a service user")?;
                 backend::reconcile(handle, uid)?;
@@ -94,7 +94,7 @@ impl Vpn {
                 backend::reconcile(handle, physical, allow_lan)?;
             }
         } else {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             let handle = {
                 let (uid, _) = service_user.context("Linux VPN requires a service user")?;
                 backend::setup(uid)?
@@ -126,7 +126,7 @@ impl Vpn {
         let Some(handle) = self.handle.as_ref() else {
             return PacketMode::None;
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             PacketMode::Fd(handle.tun_fd())
         }
@@ -146,7 +146,7 @@ impl Vpn {
             return None;
         }
         let handle = self.handle.as_ref()?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let _ = handle;
             None
@@ -168,7 +168,7 @@ impl Vpn {
         let Some(handle) = self.handle.as_ref() else {
             return Vec::new();
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let _ = handle;
             Vec::new()
@@ -184,9 +184,9 @@ impl Vpn {
         want_vpn: bool,
         transport: ChildTransport,
     ) -> anyhow::Result<()> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
         let _ = want_vpn;
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
         {
             match transport {
                 ChildTransport::None => Ok(()),
@@ -258,7 +258,7 @@ pub(crate) fn check_network(probe: NetworkProbe) -> CheckedNetwork {
 }
 
 pub(crate) async fn wait_network_change() {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
 
     #[cfg(target_os = "windows")]

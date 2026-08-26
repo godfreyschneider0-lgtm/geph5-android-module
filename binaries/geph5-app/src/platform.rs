@@ -36,7 +36,7 @@ pub(crate) fn set_system_proxy(
     connected: bool,
     pac_url: &str,
 ) -> anyhow::Result<()> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         match session {
             Some(session) => linux::apply_for_session(session, connected, pac_url),
@@ -57,7 +57,7 @@ pub(crate) fn set_system_proxy(
         windows::apply_for_session(session.unwrap_or(&default_session), connected, pac_url)
             .map(|_| ())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "windows")))]
     {
         let _ = (session, connected, pac_url);
         compile_error!("geph5-app supports only Linux, macOS, and Windows");
@@ -67,7 +67,7 @@ pub(crate) fn set_system_proxy(
 /// Body of the internal `__apply-proxy` subcommand — already running as the
 /// target user, so it just does the work directly.
 pub(crate) fn apply_proxy_in_process(connected: bool, pac_url: &str) -> anyhow::Result<()> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         linux::apply(connected, pac_url)
     }
@@ -79,7 +79,7 @@ pub(crate) fn apply_proxy_in_process(connected: bool, pac_url: &str) -> anyhow::
     {
         macos_proxy::apply(connected, pac_url)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "windows")))]
     {
         let _ = (connected, pac_url);
         compile_error!("geph5-app supports only Linux, macOS, and Windows");
@@ -102,7 +102,7 @@ fn clear_system_proxy_for_unregistration() -> anyhow::Result<()> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux {
     use std::{
         ffi::{CStr, CString},
@@ -670,6 +670,12 @@ pub(crate) struct SpawnedEngine {
 }
 
 pub(crate) fn state_dir() -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        // Android's root filesystem is read-only and has no /var/lib; /data is
+        // the persistent, root-writable location.
+        PathBuf::from("/data/geph")
+    }
     #[cfg(target_os = "linux")]
     {
         PathBuf::from("/var/lib/geph")
@@ -694,6 +700,10 @@ pub(crate) fn manager_log_path() -> PathBuf {
 
 #[allow(dead_code)]
 fn runtime_dir() -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        PathBuf::from("/data/geph/run")
+    }
     #[cfg(target_os = "linux")]
     {
         PathBuf::from("/run/geph")
@@ -727,7 +737,7 @@ fn engine_control_path(role: EngineRole) -> PathBuf {
 }
 
 pub(crate) fn current_session() -> SessionContext {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         SessionContext {
             uid: unsafe { libc::geteuid() },
@@ -744,7 +754,7 @@ pub(crate) fn current_session() -> SessionContext {
 }
 
 pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         if unsafe { libc::geteuid() } != 0 {
             anyhow::bail!("this command must be run as root (try: sudo ...)");
@@ -785,7 +795,7 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
 }
 
 pub(crate) async fn shutdown_signal() {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         use tokio::signal::unix::{SignalKind, signal};
         async fn on(kind: SignalKind) {
@@ -811,7 +821,7 @@ pub(crate) async fn shutdown_signal() {
 
 pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
     config.control_listen = None;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         config.control_listen_unix = Some(engine_control_path(role));
     }
@@ -823,7 +833,7 @@ pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
 }
 
 pub(crate) fn engine_control(role: EngineRole) -> ControlClient {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     let dialer = nanorpc_sillad::DialerTransport(sillad::unix::UnixDialer {
         path: engine_control_path(role),
     });
@@ -843,7 +853,7 @@ fn engine_pipe_name(role: EngineRole) -> &'static str {
 }
 
 pub(crate) async fn serve_manager(manager: ManagerImpl) -> anyhow::Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         use std::os::unix::fs::PermissionsExt;
         let path = PathBuf::from(geph5_misc_rpc::manager_control::MANAGER_CONTROL_SOCK);
@@ -872,6 +882,11 @@ pub(crate) async fn serve_manager(manager: ManagerImpl) -> anyhow::Result<()> {
 }
 
 pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
+    #[cfg(target_os = "android")]
+    {
+        // Android has no useradd/passwd management; the engine runs as root.
+        Ok(None)
+    }
     #[cfg(target_os = "linux")]
     {
         const USER: &str = "geph5-daemon";
@@ -938,7 +953,7 @@ pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn lookup_user(name: &str) -> Option<(u32, u32)> {
     let name = std::ffi::CString::new(name).ok()?;
     unsafe {
@@ -964,7 +979,7 @@ fn run_status(program: &str, args: &[&str]) -> anyhow::Result<()> {
 }
 
 fn engine_binary_name() -> &'static str {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         "geph5-client"
     }
@@ -995,7 +1010,7 @@ pub(crate) fn engine_bin_path() -> PathBuf {
 }
 
 fn engine_command() -> anyhow::Result<Command> {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     let path = engine_bin_path();
     #[cfg(target_os = "macos")]
     let path = staged_engine_bin()?;
@@ -1052,7 +1067,7 @@ fn staged_engine_bin() -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         spawn_engine_posix(launch)
     }
@@ -1062,7 +1077,7 @@ pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
     use std::os::unix::process::CommandExt;
 
@@ -1111,7 +1126,7 @@ fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
     })
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std::io::Result<()> {
     let error = std::io::Error::last_os_error;
     if let Some((uid, gid)) = service_user {
@@ -1127,19 +1142,19 @@ fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std:
     {
         return Err(error());
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     if unsafe { libc::prctl(1, libc::SIGTERM, 0, 0, 0) } != 0 {
         return Err(error());
     }
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn chown_path(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
     std::os::unix::fs::lchown(path, Some(uid), Some(gid))
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn chown_recursive(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
     let metadata = std::fs::symlink_metadata(path)?;
     chown_path(path, uid, gid)?;
@@ -1367,7 +1382,7 @@ fn wait_for_processes(processes: &[ProcessWaitHandle]) -> anyhow::Result<()> {
 }
 
 pub(crate) fn register_manager() -> anyhow::Result<()> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         const NAME: &str = "geph-manager.service";
         const PATH: &str = "/etc/systemd/system/geph-manager.service";
@@ -1466,7 +1481,7 @@ pub(crate) fn register_manager() -> anyhow::Result<()> {
 }
 
 pub(crate) fn unregister_manager() -> anyhow::Result<()> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         const NAME: &str = "geph-manager.service";
         const PATH: &str = "/etc/systemd/system/geph-manager.service";
