@@ -133,6 +133,8 @@ help() {
   echo "服务 [service]: start / stop / restart / status / install / help"
   echo "其他: 任意 geph5 子命令直接可用, 例如 gephctl connect、gephctl status、"
   echo "      gephctl exit-constraint set --country us、gephctl vpn on、gephctl logs"
+  echo "注意: register-manager 仅桌面平台有效 (systemd/launchd/计划任务),"
+  echo "      Android 上会报错; 本模块开机自启由 KernelSU 的 service.sh 负责"
   echo "完整子命令见: su -c \"$GEPH --help\""
 }
 
