@@ -14,23 +14,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-die() { echo "错误 [error]: $*" >&2; exit 1; }
+die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-用法 [Usage]: install.sh [zip] [选项]
+Usage: install.sh [zip] [options]
 
-  不指定 zip 时使用本脚本目录 dist/ 下最新的 geph5-ksu-*-arm64.zip。
+  When no zip is given, the newest geph5-ksu-*-arm64.zip under this script's
+  dist/ directory is used.
 
-选项 [options]:
-  --zip <path>      指定模块 zip 路径
-  --reboot          安装成功后自动重启设备 (仅 HOST 模式)
-  --no-reboot       不重启、不询问
-  -h, --help        显示本帮助
+Options:
+  --zip <path>      path to the module zip
+  --reboot          reboot the device after a successful install (HOST mode only)
+  --no-reboot       do not reboot and do not ask
+  -h, --help        show this help
 
-运行模式 [modes] (自动检测):
-  HOST   宿主电脑 + adb, 设备已授权
-  DEVICE 设备端 Termux 中直接运行
+Modes (auto-detected):
+  HOST   host PC + adb, device authorized
+  DEVICE run directly inside Termux on the rooted device
 EOF
 }
 
@@ -39,14 +40,14 @@ REBOOT=auto
 while [ $# -gt 0 ]; do
   case "$1" in
     --zip)
-      [ $# -ge 2 ] || die "--zip 需要一个路径参数"
-      [ -z "$ZIP" ] || die "zip 路径重复指定"
+      [ $# -ge 2 ] || die "--zip needs a path argument"
+      [ -z "$ZIP" ] || die "zip path given more than once"
       ZIP="$2"; shift ;;
     --reboot)    REBOOT=yes ;;
     --no-reboot) REBOOT=no ;;
     -h|--help)   usage; exit 0 ;;
-    --*)         die "未知参数: $1 (见 --help)" ;;
-    *)           [ -z "$ZIP" ] || die "zip 路径重复指定: $1"
+    --*)         die "unknown argument: $1 (see --help)" ;;
+    *)           [ -z "$ZIP" ] || die "zip path given more than once: $1"
                  ZIP="$1" ;;
   esac
   shift
@@ -55,20 +56,21 @@ done
 if [ -z "$ZIP" ]; then
   ZIP="$(ls -1t "$SCRIPT_DIR"/dist/geph5-ksu-*-arm64.zip 2>/dev/null | head -n1 || true)"
 fi
-[ -n "$ZIP" ] || die "未找到模块 zip; 请先运行 android/build-module.sh 或指定 zip 路径"
-[ -f "$ZIP" ] || die "zip 不存在: $ZIP"
-command -v unzip >/dev/null 2>&1 || die "宿主需要 unzip 命令 [host requires unzip]"
-unzip -p "$ZIP" module.prop >/dev/null 2>&1 || die "zip 中缺少 module.prop, 不是有效的 geph5 模块包: $ZIP"
-echo "==> 模块包 [module zip]: $ZIP"
+[ -n "$ZIP" ] || die "no module zip found; run android/build-module.sh first or pass a zip path"
+[ -f "$ZIP" ] || die "zip not found: $ZIP"
+command -v unzip >/dev/null 2>&1 || die "the host needs the unzip command"
+unzip -p "$ZIP" module.prop >/dev/null 2>&1 || die "zip has no module.prop; not a valid geph5 module package: $ZIP"
+echo "==> module zip: $ZIP"
 
-# --- 设备端安装链 (POSIX sh, 以 root 运行) ------------------------------------
-# 注意: 模板内禁止出现单引号 (HOST 模式需经 adb 单引号透传)。
+# --- device-side install chain (POSIX sh, run as root) -----------------------
+# Note: the template must not contain single quotes (HOST mode pipes it through
+# adb with single-quote wrapping).
 CHAIN='ZIP=__ZIP__
 MODID=geph5
 echo "[geph5] installing: $ZIP"
 [ -f "$ZIP" ] || { echo "[geph5] error: zip not found on device"; echo "__GEPH5_RESULT__=fail"; exit 1; }
-# deploy_gephctl: 刷入时顺手部署 Termux 控制脚本。优先装进 Termux 的
-# $PREFIX/bin (可执行), 否则 fallback 到 /data/local/tmp/gephctl。
+# deploy_gephctl: deploy the Termux control script at flash time. Prefer the
+# Termux $PREFIX/bin (executable), otherwise fall back to /data/local/tmp/gephctl.
 deploy_gephctl() {
   local src dest
   src="/data/adb/modules/$MODID/gephctl"
@@ -104,8 +106,9 @@ apd=
 command -v apd >/dev/null 2>&1 && apd=apd
 [ -n "$apd" ] || { [ -x /data/adb/ap/bin/apd ] && apd=/data/adb/ap/bin/apd; }
 [ -n "$apd" ] || { [ -x /data/adb/apd ] && apd=/data/adb/apd; }
-# stage_apatch: 统一把 zip 解压到 modules/<id> 与 modules_update/<id>,
-# 保证重启后无论 modules_update->modules 是否提升, 模块都能立即生效。
+# stage_apatch: unzip into both modules/<id> and modules_update/<id> so the
+# module takes effect right away regardless of whether modules_update->modules
+# is promoted on the next reboot.
 stage_files() {
   local d
   for d in "/data/adb/modules/$MODID" "/data/adb/modules_update/$MODID"; do
@@ -140,8 +143,9 @@ stage_files
 deploy_gephctl
 echo "__GEPH5_RESULT__=staged"; exit 0'
 
-# 生成设备端脚本: 把首行 ZIP=__ZIP__ 替换为实际路径 (printf %q 保证引号安全)。
-build_chain() {  # $1 = 设备端 zip 路径
+# Generate the device script: replace the leading ZIP=__ZIP__ line with the
+# real path (printf %q keeps quoting safe).
+build_chain() {  # $1 = device-side zip path
   printf 'ZIP=%s\n%s\n' "$(printf '%q' "$1")" "${CHAIN#*$'\n'}"
 }
 
@@ -156,39 +160,39 @@ parse_result() {
 
 report_result() {
   case "$1" in
-    ok)     echo "==> 安装成功 [installed]" ;;
-    staged) echo "==> 已暂存到 modules_update, 重启后完成安装 [staged, applies on reboot]" ;;
-    fail)   echo "==> 安装失败 [install failed]; 可尝试在 KernelSU 管理器中手动安装此 zip" ;;
-    *)      echo "==> 无法识别安装结果, 请检查设备 root/su 状态 [unknown result]" ;;
+    ok)     echo "==> installed" ;;
+    staged) echo "==> staged into modules_update; completes on reboot" ;;
+    fail)   echo "==> install failed; try installing this zip from the KernelSU manager" ;;
+    *)      echo "==> unrecognized install result; check the device root/su state" ;;
   esac
 }
 
-# --- HOST 模式 ---------------------------------------------------------------
+# --- HOST mode ---------------------------------------------------------------
 maybe_reboot_host() {
   local ans
   if [ "$REBOOT" = yes ]; then
-    adb reboot >/dev/null 2>&1 && echo "已发送重启指令 [rebooting now]"
+    adb reboot >/dev/null 2>&1 && echo "rebooting now"
   elif [ "$REBOOT" = auto ] && [ -t 0 ]; then
-    printf "是否立即重启设备? 重启后模块加载生效 [y/N]: "
+    printf "Reboot now so the module loads? [y/N]: "
     read -r ans
     case "$ans" in
-      y|Y) adb reboot >/dev/null 2>&1 && echo "已发送重启指令 [rebooting now]" ;;
-      *)   echo "请稍后手动重启设备 [reboot manually later]" ;;
+      y|Y) adb reboot >/dev/null 2>&1 && echo "rebooting now" ;;
+      *)   echo "reboot manually later" ;;
     esac
   else
-    echo "请稍后手动重启设备 [reboot manually later]"
+    echo "reboot manually later"
   fi
 }
 
 host_install() {
   local chain qchain out result
-  command -v adb >/dev/null 2>&1 || die "未找到 adb 命令 [adb not found]"
-  echo "==> 推送 zip 到设备 [adb push]"
-  adb push "$ZIP" /data/local/tmp/geph5-ksu.zip || die "adb push 失败, 请检查设备连接"
+  command -v adb >/dev/null 2>&1 || die "adb not found"
+  echo "==> pushing zip to device [adb push]"
+  adb push "$ZIP" /data/local/tmp/geph5-ksu.zip || die "adb push failed; check the device connection"
   chain="$(build_chain /data/local/tmp/geph5-ksu.zip)"
-  [[ "$chain" != *"'"* ]] || die "内部错误: 安装链含单引号, 无法经 adb 传输"
+  [[ "$chain" != *"'"* ]] || die "internal error: install chain contains a single quote; cannot send via adb"
   qchain="'$chain'"
-  echo "==> 在设备上以 root 执行安装 [running installer on device]"
+  echo "==> running installer as root on device"
   out="$(adb shell "su -c $qchain || su 0 -c $qchain" 2>&1 || true)"
   out="${out//$'\r'/}"
   result="$(parse_result "$out")"
@@ -196,36 +200,36 @@ host_install() {
   report_result "$result"
   if [ "$result" = ok ] || [ "$result" = staged ]; then
     adb shell rm -f /data/local/tmp/geph5-ksu.zip >/dev/null 2>&1 || true
-    echo "==> 已清理设备端临时文件 [cleaned up /data/local/tmp/geph5-ksu.zip]"
+    echo "==> cleaned up /data/local/tmp/geph5-ksu.zip"
     maybe_reboot_host
   else
-    echo "==> 设备端临时文件已保留: /data/local/tmp/geph5-ksu.zip (可手动排查)"
+    echo "==> kept device-side temp file: /data/local/tmp/geph5-ksu.zip (for manual debugging)"
   fi
 }
 
-# --- DEVICE 模式 -------------------------------------------------------------
+# --- DEVICE mode -------------------------------------------------------------
 device_install() {
   local su_bin chain out result
   su_bin="$(command -v su 2>/dev/null || true)"
   [ -n "$su_bin" ] || { [ -x /system/bin/su ] && su_bin=/system/bin/su; }
   [ -n "$su_bin" ] || { [ -x /system/xbin/su ] && su_bin=/system/xbin/su; }
-  [ -n "$su_bin" ] || die "未找到 su, 请确认设备已 root (KernelSU/Magisk/APatch)"
+  [ -n "$su_bin" ] || die "su not found; make sure the device is rooted (KernelSU/Magisk/APatch)"
   chain="$(build_chain "$ZIP")"
-  echo "==> 以 root 执行安装 [running installer via su]"
+  echo "==> running installer as root via su"
   out="$("$su_bin" -c "$chain" 2>&1 || "$su_bin" 0 -c "$chain" 2>&1 || true)"
   result="$(parse_result "$out")"
   printf '%s\n' "$out"
   report_result "$result"
   if [ "$result" = ok ] || [ "$result" = staged ]; then
     if [ -f "$SCRIPT_DIR/termux-gephctl.sh" ]; then
-      echo "==> 可安装 Termux 控制工具 gephctl [optional]"
+      echo "==> optional: install the Termux control tool gephctl"
       echo "    bash $SCRIPT_DIR/termux-gephctl.sh --install"
     fi
-    echo "==> 请重启设备使模块加载生效 [reboot to activate]"
+    echo "==> reboot the device to activate the module"
   fi
 }
 
-# --- 模式检测 ---------------------------------------------------------------
+# --- mode detection -----------------------------------------------------------
 detect_mode() {
   local st=""
   if command -v timeout >/dev/null 2>&1; then
@@ -234,18 +238,18 @@ detect_mode() {
     st="$(adb get-state 2>/dev/null || true)"
   fi
   if [ "$st" = device ]; then
-    echo "==> 安装方式 [mode]: HOST (adb 连接)"
+    echo "==> mode: HOST (adb connection)"
     host_install
     return
   fi
   if [ -d /data/data/com.termux ] || [ "$(uname -o 2>/dev/null)" = Android ]; then
-    echo "==> 安装方式 [mode]: DEVICE (Termux 直装)"
+    echo "==> mode: DEVICE (direct Termux install)"
     device_install
     return
   fi
-  die "无法确定运行模式:
-  电脑上: 连接已 root 的设备并运行本脚本 (需 adb, 设备已授权)
-  设备上: 在已 root 设备的 Termux 中直接运行本脚本"
+  die "cannot determine mode:
+  on a PC:   connect a rooted device and run this script (needs adb, authorized device)
+  on-device: run this script inside Termux on the rooted device"
 }
 
 detect_mode
