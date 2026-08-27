@@ -88,25 +88,38 @@ apd=
 command -v apd >/dev/null 2>&1 && apd=apd
 [ -n "$apd" ] || { [ -x /data/adb/ap/bin/apd ] && apd=/data/adb/ap/bin/apd; }
 [ -n "$apd" ] || { [ -x /data/adb/apd ] && apd=/data/adb/apd; }
+# stage_apatch: 统一把 zip 解压到 modules/<id> 与 modules_update/<id>,
+# 保证重启后无论 modules_update->modules 是否提升, 模块都能立即生效。
+stage_files() {
+  local d
+  for d in "/data/adb/modules/$MODID" "/data/adb/modules_update/$MODID"; do
+    rm -rf "$d"
+    mkdir -p "$d" || { echo "__GEPH5_RESULT__=fail"; exit 1; }
+    if command -v unzip >/dev/null 2>&1; then
+      ( cd "$d" && unzip -qo "$ZIP" ) || { echo "__GEPH5_RESULT__=fail"; exit 1; }
+    elif [ -x /system/bin/unzip ]; then
+      ( cd "$d" && /system/bin/unzip -qo "$ZIP" ) || { echo "__GEPH5_RESULT__=fail"; exit 1; }
+    elif [ -x /data/adb/ap/bin/busybox ]; then
+      ( cd "$d" && /data/adb/ap/bin/busybox unzip -qo "$ZIP" ) || { echo "__GEPH5_RESULT__=fail"; exit 1; }
+    else
+      echo "[geph5] error: no unzip on device; use the KernelSU manager instead"
+      echo "__GEPH5_RESULT__=fail"; exit 1
+    fi
+    [ -f "$d/module.prop" ] || { echo "[geph5] error: module.prop missing after unzip"; echo "__GEPH5_RESULT__=fail"; exit 1; }
+    chmod 0755 "$d/geph5" "$d/geph5-client" "$d/service.sh" "$d/action.sh" "$d/uninstall.sh" 2>/dev/null
+  done
+}
 if [ -n "$apd" ]; then
   echo "[geph5] try apd (APatch)..."
-  if "$apd" module install "$ZIP" >/dev/null 2>&1; then echo "__GEPH5_RESULT__=ok"; exit 0; fi
+  if "$apd" module install "$ZIP" >/dev/null 2>&1; then
+    stage_files
+    echo "__GEPH5_RESULT__=ok"
+    exit 0
+  fi
   echo "[geph5] apd failed"
 fi
-echo "[geph5] manual fallback: stage into /data/adb/modules_update/$MODID"
-rm -rf "/data/adb/modules_update/$MODID"
-mkdir -p "/data/adb/modules_update/$MODID" || { echo "__GEPH5_RESULT__=fail"; exit 1; }
-cd "/data/adb/modules_update/$MODID" || { echo "__GEPH5_RESULT__=fail"; exit 1; }
-if command -v unzip >/dev/null 2>&1; then
-  unzip -qo "$ZIP" || { echo "__GEPH5_RESULT__=fail"; exit 1; }
-elif [ -x /system/bin/unzip ]; then
-  /system/bin/unzip -qo "$ZIP" || { echo "__GEPH5_RESULT__=fail"; exit 1; }
-else
-  echo "[geph5] error: no unzip on device; use the KernelSU manager instead"
-  echo "__GEPH5_RESULT__=fail"; exit 1
-fi
-[ -f module.prop ] || { echo "[geph5] error: module.prop missing after unzip"; echo "__GEPH5_RESULT__=fail"; exit 1; }
-chmod 0755 geph5 geph5-client 2>/dev/null
+echo "[geph5] manual fallback: stage into modules/$MODID"
+stage_files
 echo "__GEPH5_RESULT__=staged"; exit 0'
 
 # 生成设备端脚本: 把首行 ZIP=__ZIP__ 替换为实际路径 (printf %q 保证引号安全)。
