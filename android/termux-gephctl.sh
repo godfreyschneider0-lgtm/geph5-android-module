@@ -1,6 +1,7 @@
-#!/usr/bin/env bash
+#!/system/bin/sh
 # termux-gephctl.sh - control the geph5 KernelSU module from Termux.
 # Install as `gephctl`:  bash termux-gephctl.sh --install
+# Also runnable directly as root from adb:  /data/local/tmp/gephctl status
 # SELinux blocks Termux (untrusted_app) from touching /data/adb, so all
 # operations run as root through `su -c`.
 DATA=/data/adb/geph5

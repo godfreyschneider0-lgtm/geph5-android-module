@@ -109,6 +109,11 @@ cp "$BIN_GEPH5" "$STAGE/geph5"
 cp "$BIN_CLIENT" "$STAGE/geph5-client"
 chmod 0755 "$STAGE/geph5" "$STAGE/geph5-client"
 
+# Include the Termux control wrapper so the installer can deploy it at flash
+# time to $PREFIX/bin/gephctl (or /data/local/tmp as a fallback).
+cp "$SCRIPT_DIR/termux-gephctl.sh" "$STAGE/gephctl"
+chmod 0755 "$STAGE/gephctl"
+
 # Best-effort strip; ship unstripped if it fails.
 if [ -x "$TOOLBIN/llvm-strip" ]; then
   "$TOOLBIN/llvm-strip" "$STAGE/geph5" "$STAGE/geph5-client" \

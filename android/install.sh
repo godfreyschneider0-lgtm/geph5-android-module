@@ -67,13 +67,29 @@ CHAIN='ZIP=__ZIP__
 MODID=geph5
 echo "[geph5] installing: $ZIP"
 [ -f "$ZIP" ] || { echo "[geph5] error: zip not found on device"; echo "__GEPH5_RESULT__=fail"; exit 1; }
+# deploy_gephctl: 刷入时顺手部署 Termux 控制脚本。优先装进 Termux 的
+# $PREFIX/bin (可执行), 否则 fallback 到 /data/local/tmp/gephctl。
+deploy_gephctl() {
+  local src dest
+  src="/data/adb/modules/$MODID/gephctl"
+  [ -f "$src" ] || src="/data/adb/modules_update/$MODID/gephctl"
+  [ -f "$src" ] || { echo "[geph5] gephctl not found in module"; return 0; }
+  if [ -d /data/data/com.termux/files/usr/bin ]; then
+    dest=/data/data/com.termux/files/usr/bin/gephctl
+    cp -f "$src" "$dest" 2>/dev/null && chmod 0755 "$dest" 2>/dev/null \
+      && echo "[geph5] gephctl -> $dest [Termux]" && return 0
+  fi
+  dest=/data/local/tmp/gephctl
+  cp -f "$src" "$dest" 2>/dev/null && chmod 0755 "$dest" 2>/dev/null \
+    && echo "[geph5] gephctl -> $dest [fallback: Termux not installed]" || true
+}
 ksud=
 command -v ksud >/dev/null 2>&1 && ksud=ksud
 [ -n "$ksud" ] || { [ -x /data/adb/ksud ] && ksud=/data/adb/ksud; }
 [ -n "$ksud" ] || { [ -x /debug_ramdisk/ksud ] && ksud=/debug_ramdisk/ksud; }
 if [ -n "$ksud" ]; then
   echo "[geph5] try ksud (KernelSU)..."
-  if "$ksud" module install "$ZIP" >/dev/null 2>&1; then echo "__GEPH5_RESULT__=ok"; exit 0; fi
+  if "$ksud" module install "$ZIP" >/dev/null 2>&1; then deploy_gephctl; echo "__GEPH5_RESULT__=ok"; exit 0; fi
   echo "[geph5] ksud failed"
 fi
 magisk=
@@ -81,7 +97,7 @@ command -v magisk >/dev/null 2>&1 && magisk=magisk
 [ -n "$magisk" ] || { [ -x /sbin/magisk ] && magisk=/sbin/magisk; }
 if [ -n "$magisk" ]; then
   echo "[geph5] try magisk --install-module..."
-  if "$magisk" --install-module "$ZIP" >/dev/null 2>&1; then echo "__GEPH5_RESULT__=ok"; exit 0; fi
+  if "$magisk" --install-module "$ZIP" >/dev/null 2>&1; then deploy_gephctl; echo "__GEPH5_RESULT__=ok"; exit 0; fi
   echo "[geph5] magisk failed"
 fi
 apd=
@@ -106,13 +122,14 @@ stage_files() {
       echo "__GEPH5_RESULT__=fail"; exit 1
     fi
     [ -f "$d/module.prop" ] || { echo "[geph5] error: module.prop missing after unzip"; echo "__GEPH5_RESULT__=fail"; exit 1; }
-    chmod 0755 "$d/geph5" "$d/geph5-client" "$d/service.sh" "$d/action.sh" "$d/uninstall.sh" 2>/dev/null
-  done
+    chmod 0755 "$d/geph5" "$d/geph5-client" "$d/service.sh" "$d/action.sh" "$d/uninstall.sh" "$d/gephctl" 2>/dev/null
+   done
 }
 if [ -n "$apd" ]; then
   echo "[geph5] try apd (APatch)..."
   if "$apd" module install "$ZIP" >/dev/null 2>&1; then
     stage_files
+    deploy_gephctl
     echo "__GEPH5_RESULT__=ok"
     exit 0
   fi
@@ -120,6 +137,7 @@ if [ -n "$apd" ]; then
 fi
 echo "[geph5] manual fallback: stage into modules/$MODID"
 stage_files
+deploy_gephctl
 echo "__GEPH5_RESULT__=staged"; exit 0'
 
 # 生成设备端脚本: 把首行 ZIP=__ZIP__ 替换为实际路径 (printf %q 保证引号安全)。
