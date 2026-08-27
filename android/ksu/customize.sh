@@ -1,17 +1,17 @@
 #!/system/bin/sh
-# Geph5 KernelSU installer: abort on non-arm64 devices, print usage info.
+# Geph5 KernelSU installer: abort on unsupported ABIs, print usage info.
 
 ABI=$(getprop ro.product.cpu.abi)
 
 case "$ABI" in
-    arm64-v8a)
+    arm64-v8a|x86_64)
         : ;;
     *)
         case "$ARCH" in
-            *arm64*)
+            *arm64*|*x64*|*x86_64*)
                 : ;;
             *)
-                abort "! geph5 module only supports arm64-v8a devices (found: $ABI)"
+                abort "! geph5 module does not support this ABI (found: $ABI)"
                 ;;
         esac
         ;;
