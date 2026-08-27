@@ -19,9 +19,10 @@ pub const MANAGER_CONTROL_SOCK: &str = "/var/run/geph/control.sock";
 /// Filesystem path of the manager's control socket.
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
 pub const MANAGER_CONTROL_SOCK: &str = "/run/geph/control.sock";
-/// Android has no writable /run; use the persistent /data partition.
+/// Android has no writable /run; use the persistent /data/adb area that the
+/// root/KernelSU-managed module owns.
 #[cfg(target_os = "android")]
-pub const MANAGER_CONTROL_SOCK: &str = "/data/geph/control.sock";
+pub const MANAGER_CONTROL_SOCK: &str = "/data/adb/geph5/control.sock";
 /// Name of the manager's control named pipe.
 #[cfg(windows)]
 pub const MANAGER_CONTROL_PIPE: &str = r"\\.\pipe\geph-manager-control";

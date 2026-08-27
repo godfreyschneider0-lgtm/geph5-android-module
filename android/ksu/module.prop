@@ -1,0 +1,6 @@
+id=geph5
+name=Geph5
+version=@@VERSION@@
+versionCode=@@VERSIONCODE@@
+author=geph
+description=Geph5 anti-censorship network. Runs the geph5 manager (root) at boot; control via `geph5` CLI, the manager app's action button, or gephctl in Termux. Working dir /data/adb/geph5.

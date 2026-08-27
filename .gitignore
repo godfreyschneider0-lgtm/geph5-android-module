@@ -1,4 +1,5 @@
 /target
+android/dist/
 test.yaml
 /daemon.log
 /home/

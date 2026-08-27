@@ -672,9 +672,10 @@ pub(crate) struct SpawnedEngine {
 pub(crate) fn state_dir() -> PathBuf {
     #[cfg(target_os = "android")]
     {
-        // Android's root filesystem is read-only and has no /var/lib; /data is
-        // the persistent, root-writable location.
-        PathBuf::from("/data/geph")
+        // Android's root filesystem is read-only and has no /var/lib; /data/adb
+        // is the persistent, root-writable area managed by KernelSU/Magisk,
+        // alongside the installed modules.
+        PathBuf::from("/data/adb/geph5")
     }
     #[cfg(target_os = "linux")]
     {
@@ -702,7 +703,7 @@ pub(crate) fn manager_log_path() -> PathBuf {
 fn runtime_dir() -> PathBuf {
     #[cfg(target_os = "android")]
     {
-        PathBuf::from("/data/geph/run")
+        PathBuf::from("/data/adb/geph5/run")
     }
     #[cfg(target_os = "linux")]
     {
