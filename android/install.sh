@@ -86,6 +86,7 @@ if [ -n "$magisk" ]; then
 fi
 apd=
 command -v apd >/dev/null 2>&1 && apd=apd
+[ -n "$apd" ] || { [ -x /data/adb/ap/bin/apd ] && apd=/data/adb/ap/bin/apd; }
 [ -n "$apd" ] || { [ -x /data/adb/apd ] && apd=/data/adb/apd; }
 if [ -n "$apd" ]; then
   echo "[geph5] try apd (APatch)..."

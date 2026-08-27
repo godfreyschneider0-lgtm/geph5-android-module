@@ -3,11 +3,19 @@
 # Install as `gephctl`:  bash termux-gephctl.sh --install
 # SELinux blocks Termux (untrusted_app) from touching /data/adb, so all
 # operations run as root through `su -c`.
-GEPH=/data/adb/modules/geph5/geph5
 DATA=/data/adb/geph5
 SOCK="$DATA/control.sock"
 PIDF="$DATA/run/manager.pid"
 LOGF="$DATA/logs/manager.log"
+
+_resolve_geph() {
+  local p
+  for p in /data/adb/modules/geph5/geph5 /data/adb/modules_update/geph5/geph5; do
+    if [ -x "$p" ] 2>/dev/null; then echo "$p"; return 0; fi
+  done
+  echo "/data/adb/modules/geph5/geph5"
+}
+GEPH="$(_resolve_geph)"
 
 SU_PREFIX="su -c"
 _ROOT_OK=

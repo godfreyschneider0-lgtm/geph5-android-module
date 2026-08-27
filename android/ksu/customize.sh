@@ -17,6 +17,15 @@ case "$ABI" in
         ;;
 esac
 
+# Ensure binaries and scripts are executable (some root managers strip +x).
+ui_print "- Setting permissions..."
+set_perm_recursive "$MODPATH" 0 0 0755 0644
+set_perm "$MODPATH/geph5" 0 0 0755
+set_perm "$MODPATH/geph5-client" 0 0 0755
+set_perm "$MODPATH/service.sh" 0 0 0755
+set_perm "$MODPATH/action.sh" 0 0 0755
+set_perm "$MODPATH/uninstall.sh" 0 0 0755
+
 ui_print "Installing Geph5 anti-censorship network module..."
 ui_print "Reboot required. After reboot:"
 ui_print "- Use the action button in the KernelSU manager app to toggle the connection"
