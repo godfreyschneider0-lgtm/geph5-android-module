@@ -38,20 +38,27 @@ require_root() {
 as_root() { $SU_PREFIX "$*"; }
 
 # --- 服务管理 ---------------------------------------------------------------
+# 管理器是否实际存活。以进程 + PID 文件双重判断, 避免残留的 control.sock
+# 文件被误判为"运行中" (geph5 manager 退出时不一定 unlink socket)。
+_manager_alive() {
+  local pid
+  if [ -f "$PIDF" ] 2>/dev/null; then
+    pid="$(as_root cat "$PIDF" 2>/dev/null)"
+    [ -n "$pid" ] && as_root kill -0 "$pid" 2>/dev/null && return 0
+  fi
+  as_root pgrep -x geph5 >/dev/null 2>&1 && return 0
+  return 1
+}
+
 cmd_start() {
   require_root
   as_root mkdir -p "$DATA/logs" "$DATA/run"
-  if as_root test -S "$SOCK" 2>/dev/null; then
+  if _manager_alive; then
     echo "geph5 管理器已在运行 [already running]"
     return 0
   fi
-  if as_root test -f "$PIDF" 2>/dev/null; then
-    old_pid="$(as_root cat "$PIDF" 2>/dev/null)"
-    if [ -n "$old_pid" ]; then
-      as_root kill -TERM "$old_pid" 2>/dev/null || true
-    fi
-    as_root rm -f "$PIDF"
-  fi
+  # 进程已死但残留 socket/pid 文件, 清掉避免干扰新实例。
+  as_root rm -f "$SOCK" "$PIDF"
   as_root "pkill -TERM -f 'geph5 manager'" 2>/dev/null || true
   sleep 1
   echo "正在启动 geph5 manager... [starting]"
@@ -63,7 +70,7 @@ cmd_start() {
     sleep 1
     i=$((i + 1))
   done
-  if as_root test -S "$SOCK" 2>/dev/null; then
+  if _manager_alive && as_root test -S "$SOCK" 2>/dev/null; then
     echo "geph5 管理器已启动 [manager up, socket ready]"
   else
     echo "警告: control.sock 15 秒内未就绪 [manager may have failed]; 查看 gephctl manager-logs"
@@ -83,7 +90,8 @@ cmd_stop() {
   as_root "pkill -TERM -f 'geph5 manager'" 2>/dev/null || true
   i=0
   while [ "$i" -lt 5 ]; do
-    if ! as_root test -S "$SOCK" 2>/dev/null; then
+    if ! _manager_alive; then
+      as_root rm -f "$SOCK"
       echo "geph5 管理器已停止 [stopped]"
       return 0
     fi
@@ -96,10 +104,8 @@ cmd_stop() {
 
 cmd_status() {
   require_root
-  if as_root test -S "$SOCK" 2>/dev/null; then
+  if _manager_alive; then
     echo "manager: 运行中 (control.sock 就绪) [running]"
-  elif as_root test -f "$PIDF" 2>/dev/null; then
-    echo "manager: pid 文件存在但 socket 未就绪 [starting or crashed]; 查看 gephctl manager-logs"
   else
     echo "manager: 未运行 [not running]; 运行 gephctl start 启动管理器"
   fi
