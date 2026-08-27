@@ -123,91 +123,32 @@ cmd_install() {
   fi
 }
 
-cmd_set_exit() {  # set-exit <cc> [city]
-  local cc city
-  require_root
-  [ $# -ge 2 ] || { echo "用法 [usage]: gephctl set-exit <国家代码> [城市]"; exit 1; }
-  cc="$2"
-  case "$cc" in
-    [A-Za-z][A-Za-z]) ;;
-    *) echo "错误: 国家代码应为两位字母, 如 CN/US/JP"; exit 1 ;;
-  esac
-  city="${3:-}"
-  as_root "$GEPH" exit-constraint set --country "$cc" ${city:+--city "$city"}
-}
-
-cmd_onoff() {  # proxy|vpn on|off
-  local mode
-  require_root
-  mode="$1"
-  [ $# -ge 3 ] || { echo "用法 [usage]: gephctl $mode on|off"; exit 1; }
-  case "$3" in
-    on|off) as_root "$GEPH" "$mode" "$3" ;;
-    *) echo "错误: 参数应为 on 或 off"; exit 1 ;;
-  esac
-}
-
-cmd_manager_logs() {  # manager-logs [n]
-  local n
-  require_root
-  n="${2:-50}"
-  case "$n" in
-    *[!0-9]*|"") n=50 ;;
-  esac
-  as_root tail -n "$n" "$LOGF"
-}
-
+# 通用透传: 除 __reserved__ 之外的所有子命令直接以 root 转发给 geph5, 例如
+#   gephctl connect
+#   gephctl exit-constraint set --country us
+#   gephctl vpn on
+#   gephctl logs -n 50
 help() {
-  cat <<'EOF'
-gephctl - 控制 geph5 KernelSU 模块 [control the geph5 module]
-服务 [service]:
-  start            启动管理器 (开机自启; 崩溃/重启后手动启动)
-  stop             停止管理器
-  restart          重启管理器
-  status           管理器状态 + geph5 连接状态
-连接 [connection]:
-  connect          连接 (首次需先 login)
-  disconnect       断开
-  reconnect        重连
-  login [secret]   登录 (无参数则提示)
-  logout           退出登录
-  register         注册新账号
-  account          账号信息
-出口 [exit nodes]:
-  exits / exit-list    列出出口节点
-  set-exit <cc> [city] 设置出口, 如 set-exit JP
-  proxy on|off         代理模式开/关
-  vpn on|off           VPN 模式开/关
-日志 [logs]:
-  logs [-n N]       geph5 CLI 日志 (默认 20 行)
-  manager-logs [n]  管理器日志 (默认 50 行)
-其他 [other]:
-  install           安装 gephctl 到 Termux (usr/bin/gephctl)
-  help              显示本帮助
-EOF
+  echo "gephctl - geph5 控制 (薄壳, 直接透传 geph5 子命令)"
+  echo "服务 [service]: start / stop / restart / status / install / help"
+  echo "其他: 任意 geph5 子命令直接可用, 例如 gephctl connect、gephctl status、"
+  echo "      gephctl exit-constraint set --country us、gephctl vpn on、gephctl logs"
+  echo "完整子命令见: su -c \"$GEPH --help\""
 }
 
 # --- 分发 -------------------------------------------------------------------
 cmd="${1:-help}"
 case "$cmd" in
   install|--install) cmd_install ;;
-  help|-h|--help)    help ;;
   start)             cmd_start ;;
   stop)              cmd_stop ;;
   restart)           cmd_stop; cmd_start ;;
   status)            cmd_status ;;
-  connect|disconnect|reconnect|login|logout|register|account|exits|logs)
+  help|-h|--help)    help ;;
+  *)
+    # 通用透传: 以 root 运行 geph5 <cmd> <args...>。
     require_root
     shift
     as_root "$GEPH" "$cmd" "$@"
-    ;;
-  exit-list)     require_root; as_root "$GEPH" exits ;;
-  set-exit)      cmd_set_exit "$@" ;;
-  proxy|vpn)     cmd_onoff "$cmd" "$@" ;;
-  manager-logs)  cmd_manager_logs "$@" ;;
-  *)
-    echo "错误 [error]: 未知命令 '$cmd'"
-    help
-    exit 1
     ;;
 esac
