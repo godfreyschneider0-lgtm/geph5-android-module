@@ -27,11 +27,12 @@ use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _
 mod allow;
 mod auth;
 mod broker;
+mod direct_count;
+mod google_selfcheck;
 mod listen;
 mod proxy;
 mod ratelimit;
 mod schedlag;
-mod google_selfcheck;
 
 #[cfg(target_env = "musl")]
 #[global_allocator]
@@ -64,17 +65,11 @@ fn instrumentation_report_loop() {
     );
     loop {
         thread::sleep(Duration::from_secs(60));
-        let picomux_stats = picomux::global_buffer_table_stats();
         let sosistab_stats = sillad_sosistab3::listener::global_listener_stats();
         tracing::info!(
             vmrss_kb = read_status_kb("VmRSS:"),
             vmswap_kb = read_status_kb("VmSwap:"),
             rate_limiter_entries = RATE_LIMITER_CACHE.entry_count(),
-            picomux_tables = picomux_stats.live_tables,
-            picomux_active_streams = picomux_stats.active_streams,
-            picomux_active_stream_capacity = picomux_stats.active_stream_capacity,
-            picomux_tombstones = picomux_stats.tombstones,
-            picomux_tombstone_capacity = picomux_stats.tombstone_capacity,
             sosistab_listeners = sosistab_stats.live_listeners,
             sosistab_queue_slots = sosistab_stats.queue_slots,
             sosistab_queue_payload_bytes = sosistab_stats.queue_payload_bytes,

@@ -4,11 +4,12 @@ use bytes::Bytes;
 use ed25519_dalek::VerifyingKey;
 use futures_util::{TryFutureExt, future::join_all};
 use geph5_broker_protocol::{
-    AccountLevel, AuthError, AvailabilityData, BridgeDescriptor, BrokerProtocol, BrokerService,
-    Credential, DOMAIN_EXIT_DESCRIPTOR, DOMAIN_EXIT_ROUTE, DOMAIN_NET_STATUS, ExitCategory,
-    ExitConstraint, ExitDescriptor, ExitList, ExitMetadata, ExitRouteDescriptor, GenericError,
-    GetExitRouteArgs, GetRoutesArgs, JsonSigned, LegacyNewsItem, Mac, NetStatus, RouteDescriptor,
-    StatEvent, StdcodeSigned, UserInfo, VoucherInfo,
+    AccountLevel, AccountSecretError, AccountSecretStatus, AuthError, AvailabilityData,
+    BridgeDescriptor, BrokerProtocol, BrokerService, Credential, DOMAIN_EXIT_DESCRIPTOR,
+    DOMAIN_EXIT_ROUTE, DOMAIN_NET_STATUS, ExitCategory, ExitConstraint, ExitDescriptor, ExitList,
+    ExitMetadata, ExitRouteDescriptor, GenericError, GetExitRouteArgs, GetRoutesArgs, JsonSigned,
+    LegacyNewsItem, Mac, NetStatus, RouteDescriptor, StatEvent, StdcodeSigned, UserInfo,
+    VoucherInfo,
 };
 use geph5_ip_to_asn::ip_to_asn_country;
 use geph5_rt::TimeoutExt;
@@ -35,7 +36,10 @@ use crate::BW_MIZARU_SK;
 use crate::bridge_filter::filter_raw_bridge_descriptors;
 use crate::database::auth::validate_secret;
 use crate::database::{
-    auth::{get_user_info, new_auth_token, register_secret, valid_auth_token, validate_credential},
+    auth::{
+        self, get_user_info, issue_auth_token, register_secret, valid_auth_token,
+        validate_credential,
+    },
     bandwidth::consume_bw,
     bridges::query_bridges,
     exits::{ExitRow, ExitRowWithMetadata, insert_exit, insert_exit_metadata},
@@ -45,7 +49,6 @@ use crate::database::{
 use crate::{
     CONFIG_FILE, FREE_MIZARU_SK, MASTER_SECRET, PLUS_MIZARU_SK,
     bridge_to_route::bridge_to_leaf_route,
-    log_error,
     news::fetch_news,
     payments::{
         GiftcardWireInfo, PaymentClient, PaymentTransport, StartAliwechatArgs, StartStripeArgs,
@@ -94,20 +97,20 @@ impl BrokerImpl {
         method: String,
         item: crate::payments::Item,
     ) -> Result<String, GenericError> {
-        static CACHE: LazyLock<Cache<(String, u32, String, crate::payments::Item), String>> =
+        let user_id = validate_secret(&secret).await?;
+        static CACHE: LazyLock<Cache<(i32, u32, String, crate::payments::Item), String>> =
             LazyLock::new(|| {
                 Cache::builder()
                     .time_to_live(Duration::from_secs(10))
                     .build()
             });
 
-        let cache_key = (secret.clone(), days, method.clone(), item.clone());
+        let cache_key = (user_id, days, method.clone(), item.clone());
         let url = CACHE
             .try_get_with(cache_key, async move {
                 let (method, promo) = method.split_once("+++").unwrap_or_else(|| (&method, ""));
                 let method = method.to_string();
                 let promo = promo.to_string();
-                let user_id = validate_credential(Credential::Secret(secret)).await?;
                 let rpc = PaymentClient(PaymentTransport);
                 let sessid = payment_sessid(user_id).await?;
                 match method.as_str() {
@@ -554,14 +557,21 @@ impl BrokerProtocol for BrokerImpl {
     }
 
     async fn get_auth_token(&self, credential: Credential) -> Result<String, AuthError> {
-        let user_id = validate_credential(credential).await?;
+        issue_auth_token(credential).await
+    }
 
-        let token = new_auth_token(user_id)
-            .await
-            .inspect_err(log_error)
-            .map_err(|_| AuthError::RateLimited)?;
+    async fn get_account_secret_status(
+        &self,
+        secret: String,
+    ) -> Result<AccountSecretStatus, AccountSecretError> {
+        auth::get_account_secret_status(&secret).await
+    }
 
-        Ok(token)
+    async fn rotate_account_secret(
+        &self,
+        current_secret: String,
+    ) -> Result<String, AccountSecretError> {
+        auth::rotate_account_secret(&current_secret).await
     }
 
     async fn get_bw_token(
@@ -903,17 +913,30 @@ impl BrokerProtocol for BrokerImpl {
         solution: String,
     ) -> Result<String, GenericError> {
         verify_puzzle_solution(&puzzle, &solution).await?;
-        Ok(register_secret(None).await?)
+        Ok(register_secret().await?)
     }
 
     async fn upgrade_to_secret(&self, cred: Credential) -> Result<String, AuthError> {
-        let user_id = validate_credential(cred).await?;
-        register_secret(Some(user_id))
-            .map_err(|_| AuthError::RateLimited)
-            .await
+        // Legacy conversion is disabled: a stored hash cannot recover the
+        // previously issued secret. Secret callers already possess that value.
+        match cred {
+            Credential::Secret(secret) => {
+                validate_secret(&secret).await?;
+                Ok(secret)
+            }
+            _ => Err(AuthError::Forbidden),
+        }
     }
 
     async fn delete_account(&self, secret: String) -> Result<(), GenericError> {
+        // Temporary kill switch; re-enable once account deletion can resume.
+        const ACCOUNT_DELETION_ENABLED: bool = false;
+        if !ACCOUNT_DELETION_ENABLED {
+            return Err(GenericError(
+                "Account deletion is temporarily disabled".to_string(),
+            ));
+        }
+
         // validate secret; get user_id
         let user_id = validate_secret(&secret).await?;
         // cancel stripe
@@ -921,7 +944,7 @@ impl BrokerProtocol for BrokerImpl {
         let sessid = payment_sessid(user_id).await?;
         rpc.cancel_recurring(sessid).await?.map_err(GenericError)?;
         // delete for good
-        crate::database::auth::delete_user_by_secret(&secret).await?;
+        auth::delete_user_by_secret(&secret).await?;
         Ok(())
     }
 
@@ -979,7 +1002,7 @@ impl BrokerProtocol for BrokerImpl {
 
     async fn get_free_voucher(&self, secret: String) -> Result<Option<VoucherInfo>, GenericError> {
         // TODO a db-driven implementation
-        let user_id = validate_credential(Credential::Secret(secret)).await?;
+        let user_id = validate_secret(&secret).await?;
         // if user_id == 42 {
         let info = get_free_voucher(user_id).await?;
         Ok(info)
@@ -1000,7 +1023,7 @@ impl BrokerProtocol for BrokerImpl {
 
     async fn redeem_voucher(&self, secret: String, code: String) -> Result<i32, GenericError> {
         // Validate the secret and get the user ID
-        let user_id = validate_credential(Credential::Secret(secret)).await?;
+        let user_id = validate_secret(&secret).await?;
 
         // Get a payment session for the user
         let sessid = payment_sessid(user_id).await?;
@@ -1057,6 +1080,17 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn legacy_conversion_is_disabled_without_database_access() {
+        let result = BrokerImpl {}
+            .upgrade_to_secret(Credential::LegacyUsernamePassword {
+                username: "legacy".into(),
+                password: "password".into(),
+            })
+            .await;
+        assert!(matches!(result, Err(AuthError::Forbidden)));
+    }
 
     #[test]
     fn parse_client_ip_accepts_ipv4() {
