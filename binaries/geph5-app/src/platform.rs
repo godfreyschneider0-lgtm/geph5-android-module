@@ -600,7 +600,7 @@ mod windows {
 
 // ---- platform-neutral application boundary ----
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 use std::path::Path;
 use std::{
     path::PathBuf,
@@ -1532,7 +1532,7 @@ pub(crate) fn unregister_manager() -> anyhow::Result<()> {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn current_exe_utf8() -> anyhow::Result<String> {
     let exe = current_exe_path()?;
     Ok(exe
