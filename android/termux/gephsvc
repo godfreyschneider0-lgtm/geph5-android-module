@@ -1,0 +1,53 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# gephsvc - control the geph5 Termux service install. No root needed: the
+# manager runs as the Termux user and its control socket lives in ~/.geph5.
+# (Distinct from `gephctl`, which the root KernelSU module deploys for
+# controlling the root instance through su.)
+SV=sv
+GEPH=geph5
+SVLOG_CURRENT=/data/data/com.termux/files/usr/var/log/sv/geph5/current
+
+help() {
+  cat <<'EOF'
+gephsvc - geph5 Termux service control (no root)
+service:  start | stop | restart | status | enable | disable   (sv lifecycle)
+logs:     manager-logs [N|-f]     manager/svlog output
+          logs [-n N]             engine logs (forwarded to geph5)
+other:    any geph5 subcommand is forwarded, e.g.
+          gephsvc connect, gephsvc login, gephsvc exit-constraint set --country us
+EOF
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  start|stop|restart)
+    "$SV" "$cmd" geph5
+    ;;
+  status)
+    "$SV" status geph5
+    echo ---
+    "$GEPH" status 2>&1 || true
+    ;;
+  manager-logs)
+    shift
+    if [ "${1:-}" = "-f" ]; then
+      exec tail -f "$SVLOG_CURRENT"
+    fi
+    tail -n "${1:-50}" "$SVLOG_CURRENT" 2>/dev/null
+    ;;
+  enable)
+    rm -f /data/data/com.termux/files/usr/sv/geph5/down
+    "$SV" up geph5
+    ;;
+  disable)
+    "$SV" down geph5
+    : > /data/data/com.termux/files/usr/sv/geph5/down
+    ;;
+  help|-h|--help)
+    help
+    ;;
+  *)
+    # Generic passthrough to the geph5 CLI (same euid, same unix socket).
+    exec "$GEPH" "$@"
+    ;;
+esac

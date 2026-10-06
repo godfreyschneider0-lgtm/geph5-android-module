@@ -1,4 +1,4 @@
-Subject: [PATCH 3/6] geph5-app: add the `register` subcommand
+Subject: [PATCH 3/9] geph5-app: add the `register` subcommand
 
 Declaring the enum variant is the whole of this patch; the implementation is
 patch 4. Kept separate so that a conflict in the handler body cannot cost you

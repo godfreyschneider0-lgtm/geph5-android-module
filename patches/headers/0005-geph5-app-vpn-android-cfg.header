@@ -1,4 +1,4 @@
-Subject: [PATCH 5/6] geph5-app: let vpn.rs reuse the linux backend on Android
+Subject: [PATCH 5/9] geph5-app: let vpn.rs reuse the linux backend on Android
 
 Pure cfg widening: android selects the same `linux` submodule and backend alias
 as linux. Android's TUN/ioctl surface is Linux's, so this is the correct

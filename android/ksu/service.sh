@@ -14,7 +14,14 @@ if [ -f "$DATA/run/manager.pid" ]; then
     fi
     rm -f "$DATA/run/manager.pid"
 fi
-pkill -TERM -f 'geph5 manager' 2>/dev/null
+# Kill only root-owned geph5 processes: an unprivileged Termux install
+# (android/termux/) may be running side by side, and is not ours to kill
+# (runit would restart it, but its sessions would still be reset).
+for pid in $(pgrep -x geph5 2>/dev/null); do
+    if [ "$(stat -c %u "/proc/$pid" 2>/dev/null)" = "0" ]; then
+        kill -TERM "$pid" 2>/dev/null
+    fi
+done
 sleep 2
 
 # Rotate the log if it grew past 4 MiB.

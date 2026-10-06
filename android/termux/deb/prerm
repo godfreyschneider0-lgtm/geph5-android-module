@@ -1,0 +1,7 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# geph5 prerm: stop the service before (re)moving files.
+
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+[ -x "$PREFIX/bin/sv" ] && "$PREFIX/bin/sv" down geph5 >/dev/null 2>&1 || true
+
+exit 0

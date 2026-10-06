@@ -1,11 +1,19 @@
-Subject: [PATCH 2/6] geph5-misc-rpc: point the control socket at /data/adb on Android
+Subject: [PATCH 2/9] geph5-misc-rpc: dual-mode control-socket resolution on Android
 
 Android has no writable /run, so the unix default of /run/geph/control.sock
-cannot be created. The root/KernelSU-managed module owns a persistent directory
-at /data/adb/geph5, which is also where platform.rs's state_dir() puts the
-state. Keeping the socket in the same subtree as the state it describes means
-one directory to back up and one to clean on uninstall.
+cannot be created. The socket now resolves through android_state_dir(), a
+runtime resolver shared with platform.rs's state_dir(): the
+root/KernelSU-Magisk module gets /data/adb/geph5, an unprivileged Termux
+service (termux-services/runit, packaged by android/termux/) gets
+$HOME/.geph5, and GEPH5_STATE_DIR overrides both for tests and rescue
+shells. Sharing one resolver means the socket can never drift away from the
+state it describes.
 
-Upstream touching this file does not make the patch fragile: it is a pair of
-cfg-gated constants, and Android is handled by adding a third arm rather than
-by editing the existing ones.
+This forced MANAGER_CONTROL_SOCK from a const into manager_control_sock(),
+so the patch now also touches its two call sites (the transport dialer in
+this file; serve_manager in platform.rs). Fragility stays low: the
+resolution logic is an additive cfg arm, and conflicts only arrive if
+upstream restructures the socket constants themselves.
+
+android_state_dir() needs libc::geteuid(); the android-only libc dependency
+lives in patch 0007.

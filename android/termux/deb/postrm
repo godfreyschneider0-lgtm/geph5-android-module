@@ -1,0 +1,19 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# geph5 postrm: unlink the service from SVDIR; clean supervision state.
+# On purge, also delete the user's data (~/.geph5: settings + cache).
+
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+HOME="${HOME:-/data/data/com.termux/files/home}"
+SVDIR="${SVDIR:-$PREFIX/var/service}"
+
+rm -f "$SVDIR/geph5" 2>/dev/null || true
+# runit supervision state is runtime data, not owned by dpkg.
+rm -rf "$PREFIX/sv/geph5/supervise" "$PREFIX/sv/geph5/log/supervise" 2>/dev/null || true
+rmdir "$PREFIX/sv/geph5/log" "$PREFIX/sv/geph5" 2>/dev/null || true
+
+if [ "$1" = "purge" ]; then
+  rm -rf "$HOME/.geph5" 2>/dev/null || true
+  echo "removed: $HOME/.geph5 (settings + cache)"
+fi
+
+exit 0

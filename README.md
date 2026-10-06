@@ -1,22 +1,61 @@
 # Geph5 Android Module
 
-Geph5 as an Android system module (KernelSU / Magisk / APatch). At boot it runs
-`geph5 manager` as root and manages the connection automatically.
+Geph5 on Android, two install modes from one source tree:
 
-Geph5 is an anti-censorship VPN/proxy client. Relative to Geph4 it is a major
-rewrite that aims to **simplify and massively clean up the design**.
+1. **Termux service (no root)** — `geph5 manager` runs as the Termux user
+   under termux-services (runit) supervision, autostarting via Termux:Boot.
+   Install as a deb (`./android/termux/build-deb.sh` on-device, then
+   `pkg install ./android/dist/geph5_*.deb`, deps auto-resolved) or from
+   source. See [android/termux/README.md](android/termux/README.md).
+
+2. **KernelSU / Magisk / APatch root module** — `geph5 manager` runs as root
+   at boot via `service.sh`; controlled with `gephctl` through `su`.
+
+Both installs can even run side by side on one device: their ports and data
+dirs differ (SOCKS5 9909/9929, HTTP 9910/9930, PAC 12223/12233;
+`/data/adb/geph5` vs `~/.geph5`). One binary serves both, told apart at
+runtime by euid.
+
+Geph5 is an anti-censorship VPN/proxy client. This repository contains **only
+the Android packaging**: the geph5 Rust source itself is the `upstream/`
+submodule (geph-official/geph5), and our changes to it live in `patches/`.
 
 ## Quick start
 
-### Build the module zips (arm64 + x64)
+### Root module (cross-compiled on your desktop)
 
 ```bash
-./android/build-module.sh                  # build both architectures
-./android/build-module.sh --arch arm64     # arm64 only
-./android/build-module.sh --skip-build     # reuse binaries, repackage only
+git clone --recurse-submodules <this repo>
+cd geph5-android-module
+./android/build-module.sh                # applies patches, builds, packages both arches
 ```
 
-Artifacts land in `android/dist/geph5-ksu-v0.4.2-{arm64,x64}.zip`.
+If you cloned without `--recurse-submodules`:
+
+```bash
+git submodule update --init upstream
+```
+
+Artifacts land in `android/dist/geph5-ksu-v<geph5-version>-{arm64,x64}.zip`.
+
+### Termux deb (built on-device)
+
+```bash
+pkg install rust dpkg termux-services   # once; also install the Termux:Boot app
+git clone --recurse-submodules <this repo> && cd geph5-android-module
+./android/termux/build-deb.sh           # applies patches, builds natively, packs the deb
+pkg install ./android/dist/geph5_*.deb
+gephsvc login && gephsvc connect         # socks5 127.0.0.1:9929, http 127.0.0.1:9930
+```
+
+### Build options
+
+```bash
+./android/build-module.sh                  # both architectures
+./android/build-module.sh --arch arm64     # arm64 only
+./android/build-module.sh --skip-build     # repackage existing binaries
+./android/build-module.sh --ndk /path/to/ndk
+```
 
 ### Install (three ways)
 
@@ -63,59 +102,62 @@ Full details: [android/ksu/README.md](android/ksu/README.md).
   `control.sock`, runtime `run/`)
 - Manager log: `/data/adb/geph5/logs/manager.log`
 
-## Notes
+## Repository layout
 
-- Full-tunnel VPN relies on `ip`/`nft`; Android lacks `nft`, so the nftables
-  kill-switch is unavailable. Proxy (SOCKS5/HTTP) + auto-proxy mode is fully
-  supported.
-- You must log in once (`gephctl login`) before you can connect.
-- `register-manager` only applies to desktop platforms (systemd/launchd/Scheduled
-  Task) and errors out on Android; this module autostarts via `service.sh`.
+| Path | What it is |
+|---|---|
+| `android/` | the module: build, install, `service.sh`, `gephctl`, zip templates |
+| `android/termux/` | the no-root Termux install: deb packaging, `gephsvc`, runit service |
+| `upstream/` | geph5 submodule, pinned; **not** ours to edit directly |
+| `patches/` | our changes to upstream files, as a patch series |
+| `apply-patches.sh` | applies the series to `upstream/`; idempotent |
+| `patches/BASE` | the upstream commit the series is written against |
 
----
+### Syncing a new upstream release
 
-# Geph5
+Full step-by-step walkthrough: [MAINTENANCE.md](MAINTENANCE.md). Summary:
 
-Key architectural differences of Geph5 versus Geph4:
+We do not merge upstream. `upstream/` stays pristine at the pinned commit, and
+our delta is re-applied on top as nine patches ordered least-fragile first.
 
-## Overview
+```bash
+git -C upstream fetch origin
+git -C upstream checkout <new-release-commit>
 
-- `sosistab2`, or anything similar that builds a reliable transport on unreliable
-  pipes, is no longer used. Obfuscated transports must themselves provide reliable
-  transport, i.e. streams multiplexed over TCP, not packets/UDP.
-- The client no longer has complex logic for intelligently hot-swapping pipes. A
-  session is started and used until it breaks, then another is started, etc. With
-  fast enough session creation the only visible difference is proxied TCP
-  connections reset, which most applications handle gracefully.
-- The central authentication server is called the **broker** (not the binder). It
-  uses a simple JSON-RPC API without end-to-end encryption; integrity-critical
-  responses carry ed25519 signatures.
-- The broker communicates with bridges and exits to set up routes, eliminating the
-  complex `(bridges) × (exits)` communication pattern.
-- VPN mode is supported by tunneling through stream (socks5) mode, with support for
-  intercepting traffic tun2socks-style.
-- Config files are used pervasively rather than long command-line argument strings.
-- GUI clients are written in Rust and call protocol libraries directly; no webviews.
+./apply-patches.sh --check upstream/     # does the series still apply?
+./android/build-module.sh               # applies and builds
+patches/regenerate.sh <new-release-commit>
+```
+
+Full rationale, the patch ordering, and the operational traps are in
+[patches/README.md](patches/README.md). Read that before syncing.
+
+### Which version is this?
+
+A Geph *app* release is not a geph5 *crate* version. `gephgui-pkg` tag `v5.9.1`
+pins the core by submodule at `1f65e9e`, whose workspace version is `0.4.2` —
+so the module zip is named `v0.4.2` even though it ships Geph 5.9.1. This
+module tracks stable app tags, never upstream `master`. The authoritative
+current pin and its history are the version ledger in
+[MAINTENANCE.md](MAINTENANCE.md); to resolve an app version to a base commit
+yourself, see [MAINTENANCE.md](MAINTENANCE.md) §5, Step 0.
+
+## Notes and limitations
+
+- **Full-tunnel VPN does not work on Android.** `vpn.rs` requires a service user
+  before setting up the backend, and Android has no `useradd`; the nftables
+  kill-switch is also unavailable (no `nft`). **Proxy (SOCKS5/HTTP) and
+  auto-proxy mode are fully supported** and are what this module is for.
+- You must log in once (`gephctl login`) before you can connect. `gephctl
+  register` creates a free account by solving a proof-of-work puzzle.
+- `register-manager` / `unregister-manager` only apply to desktop platforms
+  (systemd/launchd/Scheduled Task) and error out on Android; this module
+  autostarts via `service.sh`.
+- Data lives in `/data/adb/geph5`. Uninstalling the module removes the binaries;
+  use `gephctl` or delete that directory to remove credentials and logs.
 
 ## License
 
-The code is generally licensed under **MPL 2.0**. Low-level libraries useful to a
-wide variety of projects (e.g. the `sillad` framework) are generally licensed under
-the ISC license.
-
-## Code organization
-
-Geph5 uses a Cargo workspace ("monorepo") layout:
-
-- `libraries/`: library crates that may depend on each other; all are released to
-  crates.io.
-- `binaries/`: binary crates.
-  - `geph5-client`
-  - `geph5-exit`
-  - `geph5-bridge`
-  - `geph5-broker`
-- `android/`: Android system module (build, install, Termux control script,
-  `service.sh` autostart).
-- `patches/` + `apply-patches.sh`: our changes to upstream-owned files, as a
-  patch series applied to a geph5 checkout rather than merged into it. See
-  [patches/README.md](patches/README.md) for how to sync a new upstream release.
+The geph5 source in `upstream/` is licensed MPL-2.0 (libraries such as `sillad`
+are ISL); see `upstream/LICENSE`. The module files in `android/` are part of this
+distribution under the same terms.

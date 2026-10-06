@@ -43,7 +43,7 @@ fi
 
 cd "$REPO"
 
-# patch file stem -> path it patches. Order matters: sorted, so 0001..0006
+# patch file stem -> path it patches. Order matters: sorted, so 0001..0009
 # applies least-fragile first.
 declare -A TARGETS=(
     [0001-geph5-app-cargo-libc-android]=binaries/geph5-app/Cargo.toml
@@ -52,6 +52,9 @@ declare -A TARGETS=(
     [0004-geph5-app-client-register-command]=binaries/geph5-app/src/client.rs
     [0005-geph5-app-vpn-android-cfg]=binaries/geph5-app/src/vpn.rs
     [0006-geph5-app-platform-android]=binaries/geph5-app/src/platform.rs
+    [0007-geph5-misc-rpc-cargo-libc-android]=libraries/geph5-misc-rpc/Cargo.toml
+    [0008-geph5-app-supervisor-pac-port]=binaries/geph5-app/src/supervisor.rs
+    [0009-geph5-app-manager-pac-caller]=binaries/geph5-app/src/manager.rs
 )
 
 dirty=0

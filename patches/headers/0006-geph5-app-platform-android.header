@@ -1,17 +1,26 @@
-Subject: [PATCH 6/6] geph5-app: Android platform support in platform.rs
+Subject: [PATCH 6/9] geph5-app: Android platform support in platform.rs
 
 The single largest patch in the series, and the only one carrying real Android
-behaviour rather than cfg widening. Three kinds of change:
+behaviour rather than cfg widening. Four kinds of change:
 
-  1. Real Android paths (4 additions). state_dir() -> /data/adb/geph5 and
-     runtime_dir() -> /data/adb/geph5/run, because Android's root filesystem is
-     read-only and has no /var/lib to put state in.
+  1. Real Android paths. state_dir() routes through manager_control's
+     android_state_dir() (patch 0002): root installs resolve to
+     /data/adb/geph5 — Android's root filesystem is read-only and has no
+     /var/lib — while an unprivileged Termux install resolves to $HOME/.geph5.
+     runtime_dir() follows the state dir, so runtime sockets stay under $HOME
+     for Termux instead of the root-only /data/adb area.
 
   2. ensure_service_user() -> Ok(None). Android has no useradd/passwd
      management and the engine runs as root under KernelSU, so there is no
      service user to create or resolve.
 
-  3. apply_kde() no longer errors without HOME. The boot environment has no
+  3. require_manager_privilege() returns Ok(()) on Android, split out of the
+     linux/macos arm. One binary serves two install modes; proxy-mode
+     operation — the only mode supported on Android — needs no privilege, so
+     the manager may run unprivileged (the Termux install) and privilege is
+     enforced lazily where it would actually matter.
+
+  4. apply_kde() no longer errors without HOME. The boot environment has no
      HOME, and the KDE proxy path resolves per-user desktop config
      (kioslaverc) through $HOME. Requiring it made the manager fail to start on
      a headless root service. With no HOME there is by definition no desktop

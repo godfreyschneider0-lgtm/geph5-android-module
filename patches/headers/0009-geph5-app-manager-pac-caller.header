@@ -1,0 +1,9 @@
+Subject: [PATCH 9/9] geph5-app: follow pac_addr() in manager.rs
+
+One-line follower: apply_proxy() formats the PAC URL handed to
+set_system_proxy from supervisor::PAC_ADDR, which became a function in
+patch 0008. Exists as its own patch because the series is strictly one file
+per patch.
+
+Trivially mergeable; if this ever rejects, upstream moved the URL
+construction and patch 0008 will need re-deriving anyway.

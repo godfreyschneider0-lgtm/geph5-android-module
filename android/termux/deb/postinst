@@ -1,0 +1,77 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# geph5 postinst: seed settings, enable the sv service, start it.
+# Everything is best-effort: a half-broken environment must not fail the
+# package install; the service can always be started manually later.
+
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+HOME="${HOME:-/data/data/com.termux/files/home}"
+export SVDIR="${SVDIR:-$PREFIX/var/service}"
+export LOGDIR="${LOGDIR:-$PREFIX/var/log}"
+STATE_DIR="$HOME/.geph5"
+
+# 1. Seed settings.json on first install (partial JSON is fine: every
+#    Settings field has a serde default). Ports deliberately differ from
+#    the root-module install (9909/9910) so both can run side by side.
+if [ ! -f "$STATE_DIR/settings.json" ]; then
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  cat >"$STATE_DIR/settings.json" 2>/dev/null <<'EOF' || true
+{
+  "connected": false,
+  "proxy": {
+    "autoconf": false,
+    "listen_all": false,
+    "socks5_port": 9929,
+    "http_port": 9930
+  },
+  "vpn": false
+}
+EOF
+fi
+
+# 2. Enable the service: link it into SVDIR for runsvdir to supervise.
+mkdir -p "$SVDIR" 2>/dev/null || true
+ln -sfn "$PREFIX/sv/geph5" "$SVDIR/geph5" 2>/dev/null || true
+
+# 3. Ensure a Termux:Boot script starts runsvdir headlessly at boot.
+boot_dir="$HOME/.termux/boot"
+if ! grep -rls "service-daemon start" "$boot_dir" >/dev/null 2>&1; then
+  mkdir -p "$boot_dir" 2>/dev/null || true
+  cat >"$boot_dir/geph5-services.sh" 2>/dev/null <<'EOF' || true
+#!/data/data/com.termux/files/usr/bin/sh
+# Starts the runit service supervisor (termux-services) at boot, which in
+# turn starts every enabled service (geph5 included). Requires the
+# Termux:Boot app to be opened once after installation.
+export HOME=/data/data/com.termux/files/home
+export PREFIX=/data/data/com.termux/files/usr
+export PATH=$PREFIX/bin:$PATH
+export SVDIR=$PREFIX/var/service
+export LOGDIR=$PREFIX/var/log
+
+termux-wake-lock 2>/dev/null
+$PREFIX/bin/service-daemon start >/dev/null 2>&1
+EOF
+  chmod +x "$boot_dir/geph5-services.sh" 2>/dev/null || true
+fi
+
+# 4. The root KernelSU module deploys its own su-based `gephctl`; ours is
+#    `gephsvc`. Remove only a stale Termux-mode gephctl from earlier manual
+#    installs (recognized by its marker), never the root module's one.
+if [ -f "$PREFIX/bin/gephctl" ] && grep -q "Termux service install" "$PREFIX/bin/gephctl" 2>/dev/null; then
+  rm -f "$PREFIX/bin/gephctl"
+fi
+
+# 5. Start (or restart after upgrade). profile.d starts service-daemon for
+#    interactive shells; start it ourselves when installing headlessly.
+if ! pgrep -x runsvdir >/dev/null 2>&1; then
+  "$PREFIX/bin/service-daemon" start >/dev/null 2>&1 || true
+  sleep 1
+fi
+[ -x "$PREFIX/bin/sv" ] && "$PREFIX/bin/sv" up geph5 >/dev/null 2>&1 || true
+
+echo ""
+echo "geph5 installed. Termux:Boot app (opened once) is required for autostart."
+echo "  control:  gephsvc status | connect | login"
+echo "  socks5:   127.0.0.1:9929   http: 127.0.0.1:9930"
+echo "  data:     $STATE_DIR"
+
+exit 0

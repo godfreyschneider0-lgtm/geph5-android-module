@@ -1,6 +1,6 @@
 # Upstream sync: the patch series
 
-The Android delta is kept here as six patch files rather than as commits on top
+The Android delta is kept here as nine patch files rather than as commits on top
 of a merge. Upstream (`geph-official/geph5`) does not carry Android support and
 is not expected to, so every release we would otherwise merge a whole upstream
 tree into our history — most of which we never compile — purely to carry 107
@@ -16,10 +16,10 @@ this repo is ours outright and is never patched onto anything:
 | `android/**` — module, `service.sh`, `build-module.sh`, `gephctl`, `install.sh` | ours, no upstream counterpart |
 | `patches/**`, `apply-patches.sh` | ours |
 | `README.md`, `run-daemon.ps1` | ours (module docs) |
-| `binaries/geph5-app/{Cargo.toml,src/{cli,client,platform,vpn}.rs}` | **patched** |
-| `libraries/geph5-misc-rpc/src/manager_control.rs` | **patched** |
+| `binaries/geph5-app/{Cargo.toml,src/{cli,client,platform,supervisor,manager}.rs}` | **patched** |
+| `libraries/geph5-misc-rpc/{Cargo.toml,src/manager_control.rs}` | **patched** |
 
-Current series: 6 patches, +107/−41 lines across 6 files. Each patch header
+Current series: 9 patches, +171/−49 lines across 9 files. Each patch header
 states what the change does, how fragile it is, and what it deliberately leaves
 unfixed.
 
@@ -28,7 +28,8 @@ unfixed.
 A Geph *app* version is not a geph5 *crate* version. `gephgui-pkg` tag `v5.9.1`
 (2026-09-27) pins the core by **git submodule** at `1f65e9e`, whose workspace
 version is `0.4.2`. `patches/BASE` holds that commit; the series is written
-against it.
+against it. The pin history is the version ledger in
+[MAINTENANCE.md](../MAINTENANCE.md).
 
 When picking a base, resolve app version → submodule commit, not version strings:
 
@@ -42,6 +43,9 @@ The app tag sequence skips versions (`v5.9.0` does not exist), so do not infer a
 base from version arithmetic.
 
 ## Updating to a new upstream release
+
+The complete step-by-step procedure (including the fork-tip merge that must
+precede regeneration) is in [MAINTENANCE.md](../MAINTENANCE.md). Condensed:
 
 ```bash
 git fetch origin                       # in a geph5 checkout
@@ -65,14 +69,30 @@ also cost you the one-line libc cfg:
 
 1. `Cargo.toml` — adds `android` to the libc target cfg. A dependency table.
    Nothing can make this conflict unless the workspace is restructured.
-2. `manager_control.rs` — adds a third cfg arm for the control socket path.
+2. `manager_control.rs` — dual-mode control-socket resolution through
+   `android_state_dir()` (root → `/data/adb/geph5`, Termux → `$HOME/.geph5`,
+   `GEPH5_STATE_DIR` override); turned `MANAGER_CONTROL_SOCK` from a const
+   into a function.
 3. `cli.rs` — the `register` enum variant.
 4. `client.rs` — the `register` implementation.
 5. `vpn.rs` — cfg widening so android reuses the linux backend.
 6. `platform.rs` — **the fragile one**: 1946 lines, upstream has touched it 8
    times since 2025 (most recently 2026-08-24, in the 0.4.3 RNG refactor).
+   Also carries the dual-install feature: state dirs follow
+   `android_state_dir()` and `require_manager_privilege()` allows an
+   unprivileged manager on Android.
+7. `geph5-misc-rpc/Cargo.toml` — android libc dep for the euid probe; same
+   shape as patch 1.
+8. `supervisor.rs` — `PAC_ADDR` const → `pac_addr()` with `GEPH5_PAC_PORT`
+   override, so a Termux install (12233) can listen beside the root module
+   (12223).
+9. `manager.rs` — one-line follower of 8 (PAC URL formatting).
 
-Patches apply independently per file but the crate only compiles with all six
+7-9 were appended rather than renumbering 1-6 into a strict fragility order:
+patches apply per-file and independently, so order affects review ergonomics,
+not outcomes.
+
+Patches apply independently per file but the crate only compiles with all nine
 applied, since `client.rs` calls into `platform.rs`.
 
 ## Operational notes, learned the hard way
@@ -110,7 +130,7 @@ not a cfg tweak.
 ## Verifying the series is faithful
 
 The strong check: apply the series to a pristine checkout of the base and
-confirm the six files match the built tree byte for byte, `Cargo.lock`
+confirm the nine files match the built tree byte for byte, `Cargo.lock`
 included.
 
 ```bash

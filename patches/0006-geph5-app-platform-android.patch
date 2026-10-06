@@ -1,17 +1,26 @@
-Subject: [PATCH 6/6] geph5-app: Android platform support in platform.rs
+Subject: [PATCH 6/9] geph5-app: Android platform support in platform.rs
 
 The single largest patch in the series, and the only one carrying real Android
-behaviour rather than cfg widening. Three kinds of change:
+behaviour rather than cfg widening. Four kinds of change:
 
-  1. Real Android paths (4 additions). state_dir() -> /data/adb/geph5 and
-     runtime_dir() -> /data/adb/geph5/run, because Android's root filesystem is
-     read-only and has no /var/lib to put state in.
+  1. Real Android paths. state_dir() routes through manager_control's
+     android_state_dir() (patch 0002): root installs resolve to
+     /data/adb/geph5 — Android's root filesystem is read-only and has no
+     /var/lib — while an unprivileged Termux install resolves to $HOME/.geph5.
+     runtime_dir() follows the state dir, so runtime sockets stay under $HOME
+     for Termux instead of the root-only /data/adb area.
 
   2. ensure_service_user() -> Ok(None). Android has no useradd/passwd
      management and the engine runs as root under KernelSU, so there is no
      service user to create or resolve.
 
-  3. apply_kde() no longer errors without HOME. The boot environment has no
+  3. require_manager_privilege() returns Ok(()) on Android, split out of the
+     linux/macos arm. One binary serves two install modes; proxy-mode
+     operation — the only mode supported on Android — needs no privilege, so
+     the manager may run unprivileged (the Termux install) and privilege is
+     enforced lazily where it would actually matter.
+
+  4. apply_kde() no longer errors without HOME. The boot environment has no
      HOME, and the KDE proxy path resolves per-user desktop config
      (kioslaverc) through $HOME. Requiring it made the manager fail to start on
      a headless root service. With no HOME there is by definition no desktop
@@ -30,10 +39,10 @@ moves the code they guard, and a manual fix-up can leave a tree that compiles
 while targeting the wrong platform.
 
 ---
- 1 file changed, 46 insertions(+), 27 deletions(-)
+ 1 file changed, 57 insertions(+), 27 deletions(-)
 
 diff --git a/binaries/geph5-app/src/platform.rs b/binaries/geph5-app/src/platform.rs
-index befe6c6..902b2e4 100644
+index befe6c6..27e2c63 100644
 --- a/binaries/geph5-app/src/platform.rs
 +++ b/binaries/geph5-app/src/platform.rs
 @@ -36,7 +36,7 @@ pub(crate) fn set_system_proxy(
@@ -112,26 +121,28 @@ index befe6c6..902b2e4 100644
  pub(crate) fn state_dir() -> PathBuf {
 +    #[cfg(target_os = "android")]
 +    {
-+        // Android's root filesystem is read-only and has no /var/lib; /data/adb
-+        // is the persistent, root-writable area managed by KernelSU/Magisk,
-+        // alongside the installed modules.
-+        PathBuf::from("/data/adb/geph5")
++        // Root installs (KernelSU/Magisk module) resolve to /data/adb/geph5; an
++        // unprivileged Termux install to $HOME/.geph5. Shared with the
++        // control-socket resolution so the two can never drift apart.
++        geph5_misc_rpc::manager_control::android_state_dir()
 +    }
      #[cfg(target_os = "linux")]
      {
          PathBuf::from("/var/lib/geph")
-@@ -696,6 +706,10 @@ pub(crate) fn manager_log_path() -> PathBuf {
+@@ -696,6 +706,12 @@ pub(crate) fn manager_log_path() -> PathBuf {
  
  #[allow(dead_code)]
  fn runtime_dir() -> PathBuf {
 +    #[cfg(target_os = "android")]
 +    {
-+        PathBuf::from("/data/adb/geph5/run")
++        // Follows the state dir so an unprivileged Termux install keeps its
++        // runtime sockets under $HOME instead of the root-only /data/adb area.
++        state_dir().join("run")
 +    }
      #[cfg(target_os = "linux")]
      {
          PathBuf::from("/run/geph")
-@@ -729,7 +743,7 @@ fn engine_control_path(role: EngineRole) -> PathBuf {
+@@ -729,7 +745,7 @@ fn engine_control_path(role: EngineRole) -> PathBuf {
  }
  
  pub(crate) fn current_session() -> SessionContext {
@@ -140,16 +151,23 @@ index befe6c6..902b2e4 100644
      {
          SessionContext {
              uid: unsafe { libc::geteuid() },
-@@ -746,7 +760,7 @@ pub(crate) fn current_session() -> SessionContext {
- }
- 
- pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
--    #[cfg(any(target_os = "linux", target_os = "macos"))]
-+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+@@ -753,6 +769,15 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
+         }
+         Ok(())
+     }
++    #[cfg(target_os = "android")]
++    {
++        // One binary, two install modes: the KernelSU/Magisk root module (euid
++        // 0) and an unprivileged Termux service. Proxy-mode operation — the
++        // only mode supported on Android — needs no privilege, so the manager
++        // is allowed to run unprivileged and privilege is enforced lazily
++        // where it would actually matter.
++        Ok(())
++    }
+     #[cfg(target_os = "windows")]
      {
-         if unsafe { libc::geteuid() } != 0 {
-             anyhow::bail!("this command must be run as root (try: sudo ...)");
-@@ -787,7 +801,7 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
+         use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+@@ -787,7 +812,7 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
  }
  
  pub(crate) async fn shutdown_signal() {
@@ -158,7 +176,7 @@ index befe6c6..902b2e4 100644
      {
          use tokio::signal::unix::{SignalKind, signal};
          async fn on(kind: SignalKind) {
-@@ -813,7 +827,7 @@ pub(crate) async fn shutdown_signal() {
+@@ -813,7 +838,7 @@ pub(crate) async fn shutdown_signal() {
  
  pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
      config.control_listen = None;
@@ -167,7 +185,7 @@ index befe6c6..902b2e4 100644
      {
          config.control_listen_unix = Some(engine_control_path(role));
      }
-@@ -825,7 +839,7 @@ pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
+@@ -825,7 +850,7 @@ pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
  }
  
  pub(crate) fn engine_control(role: EngineRole) -> ControlClient {
@@ -176,7 +194,7 @@ index befe6c6..902b2e4 100644
      let dialer = nanorpc_sillad::DialerTransport(sillad::unix::UnixDialer {
          path: engine_control_path(role),
      });
-@@ -848,7 +862,7 @@ pub(crate) async fn serve_manager<R>(manager: ManagerImpl, on_ready: R) -> anyho
+@@ -848,10 +873,10 @@ pub(crate) async fn serve_manager<R>(manager: ManagerImpl, on_ready: R) -> anyho
  where
      R: FnOnce() + Send + 'static,
  {
@@ -184,8 +202,12 @@ index befe6c6..902b2e4 100644
 +    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
      {
          use std::os::unix::fs::PermissionsExt;
-         let path = PathBuf::from(geph5_misc_rpc::manager_control::MANAGER_CONTROL_SOCK);
-@@ -879,6 +893,11 @@ where
+-        let path = PathBuf::from(geph5_misc_rpc::manager_control::MANAGER_CONTROL_SOCK);
++        let path = geph5_misc_rpc::manager_control::manager_control_sock();
+         if let Some(dir) = path.parent() {
+             std::fs::create_dir_all(dir)?;
+         }
+@@ -879,6 +904,11 @@ where
  }
  
  pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
@@ -197,7 +219,7 @@ index befe6c6..902b2e4 100644
      #[cfg(target_os = "linux")]
      {
          const USER: &str = "geph5-daemon";
-@@ -945,7 +964,7 @@ pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
+@@ -945,7 +975,7 @@ pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
      }
  }
  
@@ -206,7 +228,7 @@ index befe6c6..902b2e4 100644
  fn lookup_user(name: &str) -> Option<(u32, u32)> {
      let name = std::ffi::CString::new(name).ok()?;
      unsafe {
-@@ -971,7 +990,7 @@ fn run_status(program: &str, args: &[&str]) -> anyhow::Result<()> {
+@@ -971,7 +1001,7 @@ fn run_status(program: &str, args: &[&str]) -> anyhow::Result<()> {
  }
  
  fn engine_binary_name() -> &'static str {
@@ -215,7 +237,7 @@ index befe6c6..902b2e4 100644
      {
          "geph5-client"
      }
-@@ -1002,7 +1021,7 @@ pub(crate) fn engine_bin_path() -> PathBuf {
+@@ -1002,7 +1032,7 @@ pub(crate) fn engine_bin_path() -> PathBuf {
  }
  
  fn engine_command() -> anyhow::Result<Command> {
@@ -224,7 +246,7 @@ index befe6c6..902b2e4 100644
      let path = engine_bin_path();
      #[cfg(target_os = "macos")]
      let path = staged_engine_bin()?;
-@@ -1059,7 +1078,7 @@ fn staged_engine_bin() -> anyhow::Result<PathBuf> {
+@@ -1059,7 +1089,7 @@ fn staged_engine_bin() -> anyhow::Result<PathBuf> {
  }
  
  pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
@@ -233,7 +255,7 @@ index befe6c6..902b2e4 100644
      {
          spawn_engine_posix(launch)
      }
-@@ -1069,7 +1088,7 @@ pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine
+@@ -1069,7 +1099,7 @@ pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine
      }
  }
  
@@ -242,7 +264,7 @@ index befe6c6..902b2e4 100644
  fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
      use std::os::unix::process::CommandExt;
  
-@@ -1118,7 +1137,7 @@ fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
+@@ -1118,7 +1148,7 @@ fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
      })
  }
  
@@ -251,7 +273,7 @@ index befe6c6..902b2e4 100644
  fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std::io::Result<()> {
      let error = std::io::Error::last_os_error;
      if let Some((uid, gid)) = service_user {
-@@ -1134,19 +1153,19 @@ fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std:
+@@ -1134,19 +1164,19 @@ fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std:
      {
          return Err(error());
      }
@@ -274,7 +296,7 @@ index befe6c6..902b2e4 100644
  fn chown_recursive(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
      let metadata = std::fs::symlink_metadata(path)?;
      chown_path(path, uid, gid)?;
-@@ -1374,7 +1393,7 @@ fn wait_for_processes(processes: &[ProcessWaitHandle]) -> anyhow::Result<()> {
+@@ -1374,7 +1404,7 @@ fn wait_for_processes(processes: &[ProcessWaitHandle]) -> anyhow::Result<()> {
  }
  
  pub(crate) fn register_manager() -> anyhow::Result<()> {
@@ -283,7 +305,7 @@ index befe6c6..902b2e4 100644
      {
          const NAME: &str = "geph-manager.service";
          const PATH: &str = "/etc/systemd/system/geph-manager.service";
-@@ -1454,7 +1473,7 @@ pub(crate) fn register_manager() -> anyhow::Result<()> {
+@@ -1454,7 +1484,7 @@ pub(crate) fn register_manager() -> anyhow::Result<()> {
  }
  
  pub(crate) fn unregister_manager() -> anyhow::Result<()> {
@@ -292,7 +314,7 @@ index befe6c6..902b2e4 100644
      {
          const NAME: &str = "geph-manager.service";
          const PATH: &str = "/etc/systemd/system/geph-manager.service";
-@@ -1516,7 +1535,7 @@ pub(crate) fn unregister_manager() -> anyhow::Result<()> {
+@@ -1516,7 +1546,7 @@ pub(crate) fn unregister_manager() -> anyhow::Result<()> {
      }
  }
  

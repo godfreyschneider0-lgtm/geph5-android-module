@@ -63,7 +63,9 @@ cmd_start() {
   # Process is dead but a stale socket/pidfile may remain; clear them so a new
   # instance is not disturbed.
   as_root rm -f "$SOCK" "$PIDF"
-  as_root "pkill -TERM -f 'geph5 manager'" 2>/dev/null || true
+  # Root-owned geph5 processes only: a Termux-user install (gephsvc) may be
+  # running side by side and is not ours to kill.
+  as_root 'for p in $(pgrep -x geph5); do [ "$(stat -c %u /proc/$p)" = 0 ] && kill -TERM $p; done' 2>/dev/null || true
   sleep 1
   echo "starting geph5 manager... [starting]"
   # Identical startup command to the module service.sh (single su -c, no heredoc),
@@ -92,7 +94,7 @@ cmd_stop() {
     fi
     as_root rm -f "$PIDF"
   fi
-  as_root "pkill -TERM -f 'geph5 manager'" 2>/dev/null || true
+  as_root 'for p in $(pgrep -x geph5); do [ "$(stat -c %u /proc/$p)" = 0 ] && kill -TERM $p; done' 2>/dev/null || true
   i=0
   while [ "$i" -lt 5 ]; do
     if ! _manager_alive; then

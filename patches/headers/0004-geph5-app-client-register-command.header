@@ -1,4 +1,4 @@
-Subject: [PATCH 4/6] geph5-app: implement `register` against the query engine
+Subject: [PATCH 4/9] geph5-app: implement `register` against the query engine
 
 The proof-of-work puzzle is solved inside the query engine, not in the CLI, so
 this starts registration remotely and polls for progress. On Android this

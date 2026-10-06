@@ -1,0 +1,10 @@
+Subject: [PATCH 7/9] geph5-misc-rpc: android libc dependency
+
+android_state_dir() (patch 0002) probes the effective uid with
+libc::geteuid(). The android target had no direct libc dependency in this
+crate, so the probe would not resolve. A target-gated dependency table, the
+same shape as the geph5-app one in patch 0001: nothing short of a workspace
+restructure can make this conflict.
+
+Deliberately last-but-two: dependency tables are the least fragile patch in
+any series, and appending keeps the existing numbering stable.
