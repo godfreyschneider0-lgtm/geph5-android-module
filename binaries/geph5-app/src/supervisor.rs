@@ -19,7 +19,17 @@ use crate::platform::{self, EngineLaunch, EngineRole, PacketMode, SpawnedEngine}
 
 /// PAC (proxy auto-config) endpoint the connected child serves. Always loopback:
 /// it exists only for `apply_proxy` to hand the local desktop session.
-pub const PAC_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12223);
+///
+/// The port is overridable via `GEPH5_PAC_PORT` so two installs (the root
+/// module and a Termux service) can be connected side by side on one device.
+pub fn pac_addr() -> SocketAddr {
+    if let Ok(port) = std::env::var("GEPH5_PAC_PORT")
+        && let Ok(port) = port.parse::<u16>()
+    {
+        return SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
+    }
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12223)
+}
 
 const CONFIG_TEMPLATE: &str = include_str!("../default-config.yaml");
 
@@ -198,7 +208,7 @@ fn proxy_listen_addrs(p: &ProxySettings) -> (SocketAddr, SocketAddr, SocketAddr)
     (
         SocketAddr::new(ip, p.socks5_port),
         SocketAddr::new(ip, p.http_port),
-        PAC_ADDR,
+        pac_addr(),
     )
 }
 

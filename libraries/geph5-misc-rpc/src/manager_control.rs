@@ -9,20 +9,57 @@
 //! status/stats/exits/logs through to the child's own control protocol.
 
 use async_trait::async_trait;
+use std::path::PathBuf;
 use geph5_broker_protocol::ExitConstraint;
 use nanorpc::nanorpc_derive;
 use serde::{Deserialize, Serialize};
 
 /// Filesystem path of the manager's control socket.
-#[cfg(target_os = "macos")]
-pub const MANAGER_CONTROL_SOCK: &str = "/var/run/geph/control.sock";
-/// Filesystem path of the manager's control socket.
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
-pub const MANAGER_CONTROL_SOCK: &str = "/run/geph/control.sock";
-/// Android has no writable /run; use the persistent /data/adb area that the
-/// root/KernelSU-managed module owns.
+pub fn manager_control_sock() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/var/run/geph/control.sock")
+    }
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
+    {
+        PathBuf::from("/run/geph/control.sock")
+    }
+    // Android has no writable /run; the socket lives in the resolved state
+    // directory (root module area or the Termux home, see `android_state_dir`).
+    #[cfg(target_os = "android")]
+    {
+        android_state_dir().join("control.sock")
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::new()
+    }
+}
+
+/// Resolve geph5's persistent state directory on Android.
+///
+/// One binary serves two install modes: the KernelSU/Magisk root module, whose
+/// data lives in the root-owned `/data/adb/geph5`, and an unprivileged Termux
+/// install managed by termux-services, whose data lives under `$HOME/.geph5`.
+/// Precedence: the `GEPH5_STATE_DIR` override, then euid (root → module area),
+/// then `$HOME` (Termux), and finally the root path if nothing else is known.
 #[cfg(target_os = "android")]
-pub const MANAGER_CONTROL_SOCK: &str = "/data/adb/geph5/control.sock";
+pub fn android_state_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("GEPH5_STATE_DIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir);
+    }
+    if unsafe { libc::geteuid() } == 0 {
+        return PathBuf::from("/data/adb/geph5");
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home).join(".geph5");
+    }
+    PathBuf::from("/data/adb/geph5")
+}
 /// Name of the manager's control named pipe.
 #[cfg(windows)]
 pub const MANAGER_CONTROL_PIPE: &str = r"\\.\pipe\geph-manager-control";
@@ -39,7 +76,7 @@ pub fn manager_control_transport() -> ManagerTransport {
     #[cfg(unix)]
     {
         nanorpc_sillad::DialerTransport(sillad::unix::UnixDialer {
-            path: MANAGER_CONTROL_SOCK.into(),
+            path: manager_control_sock(),
         })
     }
     #[cfg(windows)]

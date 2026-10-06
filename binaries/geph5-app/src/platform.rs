@@ -677,10 +677,10 @@ pub(crate) struct SpawnedEngine {
 pub(crate) fn state_dir() -> PathBuf {
     #[cfg(target_os = "android")]
     {
-        // Android's root filesystem is read-only and has no /var/lib; /data/adb
-        // is the persistent, root-writable area managed by KernelSU/Magisk,
-        // alongside the installed modules.
-        PathBuf::from("/data/adb/geph5")
+        // Root installs (KernelSU/Magisk module) resolve to /data/adb/geph5; an
+        // unprivileged Termux install to $HOME/.geph5. Shared with the
+        // control-socket resolution so the two can never drift apart.
+        geph5_misc_rpc::manager_control::android_state_dir()
     }
     #[cfg(target_os = "linux")]
     {
@@ -708,7 +708,9 @@ pub(crate) fn manager_log_path() -> PathBuf {
 fn runtime_dir() -> PathBuf {
     #[cfg(target_os = "android")]
     {
-        PathBuf::from("/data/adb/geph5/run")
+        // Follows the state dir so an unprivileged Termux install keeps its
+        // runtime sockets under $HOME instead of the root-only /data/adb area.
+        state_dir().join("run")
     }
     #[cfg(target_os = "linux")]
     {
@@ -760,11 +762,20 @@ pub(crate) fn current_session() -> SessionContext {
 }
 
 pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         if unsafe { libc::geteuid() } != 0 {
             anyhow::bail!("this command must be run as root (try: sudo ...)");
         }
+        Ok(())
+    }
+    #[cfg(target_os = "android")]
+    {
+        // One binary, two install modes: the KernelSU/Magisk root module (euid
+        // 0) and an unprivileged Termux service. Proxy-mode operation — the
+        // only mode supported on Android — needs no privilege, so the manager
+        // is allowed to run unprivileged and privilege is enforced lazily
+        // where it would actually matter.
         Ok(())
     }
     #[cfg(target_os = "windows")]
@@ -865,7 +876,7 @@ where
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         use std::os::unix::fs::PermissionsExt;
-        let path = PathBuf::from(geph5_misc_rpc::manager_control::MANAGER_CONTROL_SOCK);
+        let path = geph5_misc_rpc::manager_control::manager_control_sock();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }

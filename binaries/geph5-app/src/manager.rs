@@ -270,7 +270,7 @@ impl ManagerImpl {
 
 /// Configure (or clear) the given session's system proxy off the reactor thread.
 async fn apply_proxy(session: Option<SessionContext>, connected: bool) -> Result<(), String> {
-    let url = format!("http://{}/proxy.pac", supervisor::PAC_ADDR);
+    let url = format!("http://{}/proxy.pac", supervisor::pac_addr());
     let res = geph5_rt::spawn_blocking(move || {
         platform::set_system_proxy(session.as_ref(), connected, &url)
     })
