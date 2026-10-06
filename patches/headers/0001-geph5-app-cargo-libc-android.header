@@ -1,0 +1,10 @@
+Subject: [PATCH 1/6] geph5-app: widen the libc target cfg to cover Android
+
+On Android geph5-app links against the NDK libc, exactly as on Linux. Without
+this the crate compiles for target_os="android" but every `libc::` call in
+platform.rs resolves to nothing, so the Android build of geph5-app fails.
+
+This is a single line in a dependency table, which is the least fragile place
+in the whole series: nothing about it can drift out of date when upstream
+refactors code around it. If this patch ever conflicts, something structural
+happened to the workspace and you should re-read this file rather than force it.

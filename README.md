@@ -116,3 +116,6 @@ Geph5 uses a Cargo workspace ("monorepo") layout:
   - `geph5-broker`
 - `android/`: Android system module (build, install, Termux control script,
   `service.sh` autostart).
+- `patches/` + `apply-patches.sh`: our changes to upstream-owned files, as a
+  patch series applied to a geph5 checkout rather than merged into it. See
+  [patches/README.md](patches/README.md) for how to sync a new upstream release.

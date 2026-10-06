@@ -1,0 +1,30 @@
+Subject: [PATCH 6/6] geph5-app: Android platform support in platform.rs
+
+The single largest patch in the series, and the only one carrying real Android
+behaviour rather than cfg widening. Three kinds of change:
+
+  1. Real Android paths (4 additions). state_dir() -> /data/adb/geph5 and
+     runtime_dir() -> /data/adb/geph5/run, because Android's root filesystem is
+     read-only and has no /var/lib to put state in.
+
+  2. ensure_service_user() -> Ok(None). Android has no useradd/passwd
+     management and the engine runs as root under KernelSU, so there is no
+     service user to create or resolve.
+
+  3. apply_kde() no longer errors without HOME. The boot environment has no
+     HOME, and the KDE proxy path resolves per-user desktop config
+     (kioslaverc) through $HOME. Requiring it made the manager fail to start on
+     a headless root service. With no HOME there is by definition no desktop
+     session, so skipping is correct, not a workaround. service.sh and
+     termux-gephctl.sh also export HOME=/data/adb/geph5 at boot.
+
+The remaining ~20 hunks are mechanical cfg widening (target_os = "linux" ->
+any(linux, android)) across proxy application, privilege checks, shutdown
+signal handling, engine spawning, systemd registration and path helpers.
+
+Fragility: high, and it goes last for that reason. This file is 1946 lines and
+upstream has touched it 8 times since 2025 (most recently 2026-08-24, in the
+0.4.3 RNG refactor). If this patch rejects, do not hand-merge: re-derive it
+with patches/regenerate.sh, because the cfg attributes move whenever upstream
+moves the code they guard, and a manual fix-up can leave a tree that compiles
+while targeting the wrong platform.

@@ -1,0 +1,119 @@
+Subject: [PATCH 5/6] geph5-app: let vpn.rs reuse the linux backend on Android
+
+Pure cfg widening: android selects the same `linux` submodule and backend alias
+as linux. Android's TUN/ioctl surface is Linux's, so this is the correct
+backend, and duplicating platform.rs's linux module would be worse.
+
+KNOWN LIMITATION, unchanged by this patch: bring_tunnel_up still fails on
+Android with "Linux VPN requires a service user", because ensure_service_user()
+returns None there (patch 6) and vpn.rs requires a uid/gid before calling
+backend::setup. Fixing full-tunnel VPN on Android is a real piece of work, not
+a cfg tweak, and is out of scope for the sync model. Proxy mode, which is what
+the module's action.sh uses, does not go through this path.
+
+Fragility: medium. Roughly a dozen cfg attributes; a large share of the file
+is cfg-gated, so an upstream reorganisation that moves the attributes out of
+the functions they guard will produce rejects here.
+
+---
+ 1 file changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/binaries/geph5-app/src/vpn.rs b/binaries/geph5-app/src/vpn.rs
+index cb30093..39023a8 100644
+--- a/binaries/geph5-app/src/vpn.rs
++++ b/binaries/geph5-app/src/vpn.rs
+@@ -4,21 +4,21 @@ use anyhow::Context as _;
+ 
+ use crate::platform::{ChildTransport, PacketMode};
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ mod linux;
+ #[cfg(target_os = "macos")]
+ mod macos;
+ #[cfg(target_os = "windows")]
+ mod windows;
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ use linux as backend;
+ #[cfg(target_os = "macos")]
+ use macos as backend;
+ #[cfg(target_os = "windows")]
+ use windows as backend;
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
++#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "windows")))]
+ compile_error!("geph5-app supports only Linux, macOS, and Windows");
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -68,10 +68,10 @@ impl Vpn {
+         allow_lan: bool,
+         service_user: Option<(u32, u32)>,
+     ) -> anyhow::Result<()> {
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "android"))]
+         let _ = allow_lan;
+         if let Some(handle) = self.handle.as_mut() {
+-            #[cfg(target_os = "linux")]
++            #[cfg(any(target_os = "linux", target_os = "android"))]
+             {
+                 let (uid, _) = service_user.context("Linux VPN requires a service user")?;
+                 backend::reconcile(handle, uid)?;
+@@ -94,7 +94,7 @@ impl Vpn {
+                 backend::reconcile(handle, physical, allow_lan)?;
+             }
+         } else {
+-            #[cfg(target_os = "linux")]
++            #[cfg(any(target_os = "linux", target_os = "android"))]
+             let handle = {
+                 let (uid, _) = service_user.context("Linux VPN requires a service user")?;
+                 backend::setup(uid)?
+@@ -126,7 +126,7 @@ impl Vpn {
+         let Some(handle) = self.handle.as_ref() else {
+             return PacketMode::None;
+         };
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "android"))]
+         {
+             PacketMode::Fd(handle.tun_fd())
+         }
+@@ -146,7 +146,7 @@ impl Vpn {
+             return None;
+         }
+         let handle = self.handle.as_ref()?;
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "android"))]
+         {
+             let _ = handle;
+             None
+@@ -168,7 +168,7 @@ impl Vpn {
+         let Some(handle) = self.handle.as_ref() else {
+             return Vec::new();
+         };
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "android"))]
+         {
+             let _ = handle;
+             Vec::new()
+@@ -184,9 +184,9 @@ impl Vpn {
+         want_vpn: bool,
+         transport: ChildTransport,
+     ) -> anyhow::Result<()> {
+-        #[cfg(any(target_os = "linux", target_os = "macos"))]
++        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+         let _ = want_vpn;
+-        #[cfg(any(target_os = "linux", target_os = "macos"))]
++        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+         {
+             match transport {
+                 ChildTransport::None => Ok(()),
+@@ -258,7 +258,7 @@ pub(crate) fn check_network(probe: NetworkProbe) -> CheckedNetwork {
+ }
+ 
+ pub(crate) async fn wait_network_change() {
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "android"))]
+     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+ 
+     #[cfg(target_os = "windows")]

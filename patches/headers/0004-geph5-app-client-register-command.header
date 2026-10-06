@@ -1,0 +1,11 @@
+Subject: [PATCH 4/6] geph5-app: implement `register` against the query engine
+
+The proof-of-work puzzle is solved inside the query engine, not in the CLI, so
+this starts registration remotely and polls for progress. On Android this
+matters more than elsewhere: there is no browser to hand the signup page to,
+so in-module registration is the only way a phone user can get an account.
+
+Depends on the Register variant from patch 3 and on
+platform::engine_control(EngineRole::Query) from patch 6; it will not compile
+until patch 6 is applied too. Patch *application*, however, is independent per
+file, which is the point of the split.

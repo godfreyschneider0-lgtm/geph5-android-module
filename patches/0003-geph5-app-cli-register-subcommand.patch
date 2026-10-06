@@ -1,0 +1,25 @@
+Subject: [PATCH 3/6] geph5-app: add the `register` subcommand
+
+Declaring the enum variant is the whole of this patch; the implementation is
+patch 4. Kept separate so that a conflict in the handler body cannot cost you
+the CLI surface, which is what the module's shell scripts actually parse.
+
+Deriving the variant name from the keyword gives the `geph5 register` verb.
+
+---
+ 1 file changed, 3 insertions(+)
+
+diff --git a/binaries/geph5-app/src/cli.rs b/binaries/geph5-app/src/cli.rs
+index e790a30..e3ffa03 100644
+--- a/binaries/geph5-app/src/cli.rs
++++ b/binaries/geph5-app/src/cli.rs
+@@ -36,6 +36,9 @@ pub enum Command {
+     Logout,
+     /// Show account information.
+     Account,
++    /// Register a new free account by solving a proof-of-work puzzle, then
++    /// log in with the resulting secret.
++    Register,
+ 
+     /// Bring the tunnel up.
+     Connect,

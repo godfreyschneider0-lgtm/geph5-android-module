@@ -1,0 +1,16 @@
+Subject: [PATCH 5/6] geph5-app: let vpn.rs reuse the linux backend on Android
+
+Pure cfg widening: android selects the same `linux` submodule and backend alias
+as linux. Android's TUN/ioctl surface is Linux's, so this is the correct
+backend, and duplicating platform.rs's linux module would be worse.
+
+KNOWN LIMITATION, unchanged by this patch: bring_tunnel_up still fails on
+Android with "Linux VPN requires a service user", because ensure_service_user()
+returns None there (patch 6) and vpn.rs requires a uid/gid before calling
+backend::setup. Fixing full-tunnel VPN on Android is a real piece of work, not
+a cfg tweak, and is out of scope for the sync model. Proxy mode, which is what
+the module's action.sh uses, does not go through this path.
+
+Fragility: medium. Roughly a dozen cfg attributes; a large share of the file
+is cfg-gated, so an upstream reorganisation that moves the attributes out of
+the functions they guard will produce rejects here.
