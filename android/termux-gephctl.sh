@@ -66,8 +66,9 @@ cmd_start() {
   as_root "pkill -TERM -f 'geph5 manager'" 2>/dev/null || true
   sleep 1
   echo "starting geph5 manager... [starting]"
-  # Identical startup command to the module service.sh (single su -c, no heredoc).
-  as_root 'sh -c "nohup /data/adb/modules/geph5/geph5 manager >>/data/adb/geph5/logs/manager.log 2>&1 & echo \$! >/data/adb/geph5/run/manager.pid"'
+  # Identical startup command to the module service.sh (single su -c, no heredoc),
+  # including the HOME export (the boot env has none; see service.sh).
+  as_root 'sh -c "HOME=/data/adb/geph5; export HOME; nohup /data/adb/modules/geph5/geph5 manager >>/data/adb/geph5/logs/manager.log 2>&1 & echo \$! >/data/adb/geph5/run/manager.pid"'
   i=0
   while [ "$i" -lt 15 ]; do
     as_root test -S "$SOCK" 2>/dev/null && break

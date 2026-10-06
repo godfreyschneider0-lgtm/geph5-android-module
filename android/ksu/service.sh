@@ -25,6 +25,12 @@ if [ -f "$DATA/logs/manager.log" ]; then
     fi
 fi
 
+# The boot environment has no HOME, and the system-proxy code resolves
+# per-user desktop configs (KDE kioslaverc) through $HOME. Give the manager a
+# sane HOME so that code path degrades cleanly instead of erroring.
+HOME=$DATA
+export HOME
+
 # Start the manager (the engine child dies with it via PDEATHSIG).
 nohup "$MODDIR/geph5" manager >>"$DATA/logs/manager.log" 2>&1 &
 echo $! >"$DATA/run/manager.pid"
