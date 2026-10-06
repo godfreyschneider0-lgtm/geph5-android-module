@@ -113,11 +113,11 @@ if [ ! -f "$WORKSPACE/Cargo.toml" ]; then
        git submodule update --init --recursive upstream"
 fi
 if [ "$SKIP_BUILD" -eq 1 ]; then
-  "$REPO_ROOT/apply-patches.sh" --check "$WORKSPACE" \
+  bash "$REPO_ROOT/apply-patches.sh" --check "$WORKSPACE" \
     || die "patch series does not apply to upstream/ (--skip-build was given)"
 else
   echo "=== applying patch series to upstream/ ==="
-  "$REPO_ROOT/apply-patches.sh" "$WORKSPACE" \
+  bash "$REPO_ROOT/apply-patches.sh" "$WORKSPACE" \
     || die "patch series did not apply; refusing to build an unpatched tree"
 fi
 

@@ -27,6 +27,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+SKIP_BUILD=0
+[ "${1:-}" = "--skip-build" ] && SKIP_BUILD=1
+
 # --- upstream workspace ----------------------------------------------------
 # Same contract as android/build-module.sh: never build an unpatched tree.
 WORKSPACE="$REPO_ROOT/upstream"
@@ -35,19 +38,16 @@ if [ ! -f "$WORKSPACE/Cargo.toml" ]; then
        git submodule update --init --recursive upstream"
 fi
 if [ "$SKIP_BUILD" -eq 1 ]; then
-  "$REPO_ROOT/apply-patches.sh" --check "$WORKSPACE" \
+  bash "$REPO_ROOT/apply-patches.sh" --check "$WORKSPACE" \
     || die "patch series does not apply to upstream/ (--skip-build was given)"
 else
   echo "=== applying patch series to upstream/ ==="
-  "$REPO_ROOT/apply-patches.sh" "$WORKSPACE" \
+  bash "$REPO_ROOT/apply-patches.sh" "$WORKSPACE" \
     || die "patch series did not apply; refusing to build an unpatched tree"
 fi
 
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 die() { echo "error: $*" >&2; exit 1; }
-
-SKIP_BUILD=0
-[ "${1:-}" = "--skip-build" ] && SKIP_BUILD=1
 
 [ -d "$PREFIX" ] || die "not running inside Termux (\$PREFIX=$PREFIX)"
 command -v cargo >/dev/null 2>&1 || die "cargo not found; pkg install rust"

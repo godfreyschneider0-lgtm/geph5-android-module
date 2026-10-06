@@ -15,6 +15,47 @@ at runtime by euid: root → data in `/data/adb/geph5`, unprivileged → data in
 | PAC        | 127.0.0.1:12223 | 127.0.0.1:**12233** |
 | RPC control | unix socket `/data/adb/geph5/control.sock` | unix socket `~/.geph5/control.sock` |
 
+## Build flow: cross-compile on the desktop, package on the phone
+
+Termux's own packages are all cross-compiled on x86_64 servers
+(termux-packages + the `termux/package-builder` Docker image) — nobody
+compiles on a phone, and neither should you. The deb flow mirrors that:
+
+1. **Desktop** — cross-compile once for every arch you ship:
+
+   ```bash
+   ./android/build-module.sh                # aarch64 + x86_64 via the NDK
+   # binaries land in upstream/target/<arch>-linux-android/release/
+   ```
+
+2. **Push** the matching arch to the phone and stage them where
+   `build-deb.sh --skip-build` looks:
+
+   ```bash
+   adb push upstream/target/aarch64-linux-android/release/geph5 \
+             /data/local/tmp/geph5.cross
+   adb push upstream/target/aarch64-linux-android/release/geph5-client \
+             /data/local/tmp/geph5-client.cross
+   # as the termux user, into <repo>/upstream/target/release/:
+   cp /data/local/tmp/geph5.cross       ~/g5/upstream/target/release/geph5
+   cp /data/local/tmp/geph5-client.cross ~/g5/upstream/target/release/geph5-client
+   ```
+
+3. **Phone (Termux)** — package and install, no compilation:
+
+   ```bash
+   bash ./android/termux/build-deb.sh --skip-build
+   pkg install ./android/dist/geph5_*_aarch64.deb
+   ```
+
+The NDK binaries are bionic-linked like Termux's own and run unmodified
+(verified on-device). The on-device `cargo build` path below remains for
+development; note that on a censored network `cargo fetch` is the bottleneck
+(crates.io through a slow exit), so prefer the cross flow.
+
+Android has no `/usr/bin/env`, so the repo scripts with `#!/usr/bin/env bash`
+shebangs must be invoked as `bash <script>` (the in-repo callers do).
+
 ## Install
 
 ### Option A: install the .deb (recommended)
