@@ -9,7 +9,7 @@
 # Usage:
 #   ./android/termux/build-deb.sh [--skip-build]
 #
-# The Rust source is the upstream/ submodule; this script applies patches/ to
+# The Rust source is the upstream/ pristine clone; this script applies patches/ to
 # it before building (same as android/build-module.sh), so a plain checkout
 # of this repo builds without any manual preparation step.
 #
@@ -33,9 +33,14 @@ SKIP_BUILD=0
 # --- upstream workspace ----------------------------------------------------
 # Same contract as android/build-module.sh: never build an unpatched tree.
 WORKSPACE="$REPO_ROOT/upstream"
+# upstream/ is a plain, gitignored pristine clone pinned by patches/BASE (not
+# a submodule). Bootstrap it on first use; git honours https_proxy if set.
 if [ ! -f "$WORKSPACE/Cargo.toml" ]; then
-  die "upstream/ is not initialised. Run:
-       git submodule update --init --recursive upstream"
+  echo "=== bootstrapping upstream/ (pristine clone at patches/BASE) ==="
+  git clone https://github.com/geph-official/geph5.git "$WORKSPACE" \
+    || die "could not clone geph5 into $WORKSPACE (set https_proxy if censored)"
+  git -C "$WORKSPACE" checkout --quiet "$(cat "$REPO_ROOT/patches/BASE")" \
+    || die "could not pin upstream/ to patches/BASE"
 fi
 if [ "$SKIP_BUILD" -eq 1 ]; then
   bash "$REPO_ROOT/apply-patches.sh" --check "$WORKSPACE" \

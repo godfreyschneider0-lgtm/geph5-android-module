@@ -1,6 +1,4 @@
-/target
-android/dist/
-test.yaml
-/daemon.log
-/home/
-daemon.log
+/android/dist/
+/upstream/
+/target/
+.omo/

@@ -8,12 +8,17 @@
 # into android/dist/geph5-ksu-<version>-<arch>.zip. Each zip root contains
 # module.prop directly, ready for KernelSU.
 #
+# The Rust source is the upstream/ pristine clone; this script applies patches/ to it
+# before building, so a plain checkout of this repo builds without any manual
+# preparation step.
+#
 # Usage:
 #   ./android/build-module.sh [--skip-build] [--ndk <path>] [--arch all|arm64|x64]
 #
 # Options:
 #   --skip-build   Reuse existing release binaries (no cargo build). Requires
-#                  binaries already present for every requested arch.
+#                  binaries already present in upstream/target for every
+#                  requested arch. Still verifies the patch series applies.
 #   --ndk <path>   Android NDK root. Default: $ANDROID_NDK_HOME, then
 #                  $ANDROID_NDK_ROOT, then the newest version under
 #                  $HOME/Android/Sdk/ndk/.
@@ -21,7 +26,8 @@
 #
 # Requirements: bash, cargo with rustup targets aarch64-linux-android and
 #               x86_64-linux-android, git, zip, an Android NDK with the
-#               <arch>-linux-android24 toolchains.
+#               <arch>-linux-android24 toolchains, and an initialised
+#               network (git clone of geph5 is auto-bootstrapped on first run).
 set -euo pipefail
 
 # Resolve paths relative to this script so it works from any cwd.
@@ -58,6 +64,29 @@ case "$ARCHS" in
   *) die "invalid --arch: $ARCHS (expected all|arm64|x64)" ;;
 esac
 
+# --- upstream workspace ----------------------------------------------------
+# A patch that silently fails to apply yields a binary that gates on the wrong
+# target OS, so abort here rather than shipping it.
+WORKSPACE="$REPO_ROOT/upstream"
+# upstream/ is a plain, gitignored pristine clone pinned by patches/BASE (not
+# a submodule). Bootstrap it on first use; git honours https_proxy if set.
+if [ ! -f "$WORKSPACE/Cargo.toml" ]; then
+  echo "=== bootstrapping upstream/ (pristine clone at patches/BASE) ==="
+  git clone https://github.com/geph-official/geph5.git "$WORKSPACE" \
+    || die "could not clone geph5 into $WORKSPACE (set https_proxy if censored)"
+  git -C "$WORKSPACE" checkout --quiet "$(cat "$REPO_ROOT/patches/BASE")" \
+    || die "could not pin upstream/ to patches/BASE"
+fi
+
+if [ "$SKIP_BUILD" -eq 0 ]; then
+  echo "=== applying patch series to upstream/ ==="
+  "$REPO_ROOT/apply-patches.sh" "$WORKSPACE" || die "patch series did not apply; refusing to build an unpatched tree"
+  echo
+else
+  "$REPO_ROOT/apply-patches.sh" --check "$WORKSPACE" \
+    || die "patch series does not apply to upstream/ (--skip-build was given)"
+fi
+
 # --- NDK resolution --------------------------------------------------------
 if [ -z "$NDK" ]; then
   NDK_ROOT="$HOME/Android/Sdk/ndk"
@@ -77,10 +106,12 @@ TOOLBIN="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 [ -d "$TOOLBIN" ] || die "NDK prebuilt toolchain dir not found: $TOOLBIN"
 
 # --- version info ----------------------------------------------------------
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
-[ -n "$VERSION" ] || die "could not read workspace version from Cargo.toml"
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$WORKSPACE/Cargo.toml" | head -n1)"
+[ -n "$VERSION" ] || die "could not read workspace version from upstream/Cargo.toml"
 VERSION="v$VERSION"
-VERSIONCODE="$(git rev-list --count HEAD 2>/dev/null || date +%Y%m%d)"
+# Tracks upstream/, not this repo: versionCode should rise with the upstream
+# release, not with every patch or doc commit made here.
+VERSIONCODE="$(git -C "$WORKSPACE" rev-list --count HEAD 2>/dev/null || date +%Y%m%d)"
 
 # arch -> rust target, zip arch label
 arm64() { TARGET=aarch64-linux-android; ZLAB=arm64; }
@@ -100,7 +131,7 @@ build_one() {
   export "CC_${TUVAR}=$LINKER"
   export "AR_${TUVAR}=$TOOLBIN/llvm-ar"
 
-  RELDIR="target/$TARGET/release"
+  RELDIR="$WORKSPACE/target/$TARGET/release"
   BIN_GEPH5="$RELDIR/geph5"
   BIN_CLIENT="$RELDIR/geph5-client"
 
@@ -110,7 +141,8 @@ build_one() {
       || die "--skip-build: missing binaries (expected $BIN_GEPH5 and $BIN_CLIENT); run without --skip-build first"
     echo "skip-build: reusing existing binaries in $RELDIR" >&2
   else
-    cargo build --release --target "$TARGET" -p geph5-app -p geph5-client
+    # the cd is load-bearing: cargo finds .cargo/config.toml by walking up from cwd, not from --manifest-path
+    (cd "$WORKSPACE" && cargo build --release --target "$TARGET" -p geph5-app -p geph5-client)
   fi
   [ -f "$BIN_GEPH5" ] && [ -f "$BIN_CLIENT" ] \
     || die "build produced no binaries; expected $BIN_GEPH5 and $BIN_CLIENT"

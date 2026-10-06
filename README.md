@@ -16,24 +16,20 @@ dirs differ (SOCKS5 9909/9929, HTTP 9910/9930, PAC 12223/12233;
 `/data/adb/geph5` vs `~/.geph5`). One binary serves both, told apart at
 runtime by euid.
 
-Geph5 is an anti-censorship VPN/proxy client. This repository contains **only
-the Android packaging**: the geph5 Rust source itself is the `upstream/`
-submodule (geph-official/geph5), and our changes to it live in `patches/`.
+Geph5 is an anti-censorship VPN/proxy client. This repository carries the full
+geph5 fork tree at its root (readable reference — most of it is never
+compiled), our changes to upstream files live in `patches/` as a series, and
+`upstream/` is a plain gitignored pristine clone (auto-created on first
+build, pinned to the commit in `patches/BASE`) used as the build input.
 
 ## Quick start
 
 ### Root module (cross-compiled on your desktop)
 
 ```bash
-git clone --recurse-submodules <this repo>
+git clone <this repo>
 cd geph5-android-module
-./android/build-module.sh                # applies patches, builds, packages both arches
-```
-
-If you cloned without `--recurse-submodules`:
-
-```bash
-git submodule update --init upstream
+./android/build-module.sh                # bootstraps upstream/, applies patches, builds, packages
 ```
 
 Artifacts land in `android/dist/geph5-ksu-v<geph5-version>-{arm64,x64}.zip`.
@@ -42,8 +38,8 @@ Artifacts land in `android/dist/geph5-ksu-v<geph5-version>-{arm64,x64}.zip`.
 
 ```bash
 pkg install rust dpkg termux-services   # once; also install the Termux:Boot app
-git clone --recurse-submodules <this repo> && cd geph5-android-module
-./android/termux/build-deb.sh           # applies patches, builds natively, packs the deb
+git clone <this repo> && cd geph5-android-module
+./android/termux/build-deb.sh           # bootstraps upstream/, applies patches, builds natively, packs the deb
 pkg install ./android/dist/geph5_*.deb
 gephsvc login && gephsvc connect         # socks5 127.0.0.1:9929, http 127.0.0.1:9930
 ```
@@ -108,7 +104,7 @@ Full details: [android/ksu/README.md](android/ksu/README.md).
 |---|---|
 | `android/` | the module: build, install, `service.sh`, `gephctl`, zip templates |
 | `android/termux/` | the no-root Termux install: deb packaging, `gephsvc`, runit service |
-| `upstream/` | geph5 submodule, pinned; **not** ours to edit directly |
+| `upstream/` | pristine geph5 clone (gitignored, auto-bootstrapped, pinned by `patches/BASE`); **not** ours to edit |
 | `patches/` | our changes to upstream files, as a patch series |
 | `apply-patches.sh` | applies the series to `upstream/`; idempotent |
 | `patches/BASE` | the upstream commit the series is written against |

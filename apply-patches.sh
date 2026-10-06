@@ -144,19 +144,21 @@ done
 echo
 
 total=${#patches[@]}
-if [ "$skipped" -eq 0 ]; then
-    tally="$applied applied"
+if [ "$mode" = "check" ]; then
+    tally="$((applied + skipped))/$total applicable"
+    [ "$skipped" -gt 0 ] && tally="$tally, $skipped already present"
 else
-    tally="$applied applied, $skipped already present"
+    tally="$applied applied"
+    [ "$skipped" -gt 0 ] && tally="$tally, $skipped already present"
 fi
 
 if [ "$failed" -eq 0 ]; then
     case "$mode" in
-        check) echo "all $total patches accounted for ($tally); nothing was modified" ;;
+        check) echo "all $total patches verified against the tree: $tally; nothing was modified" ;;
         *)     echo "all $total patches accounted for: $tally"
                echo
                echo "next: confirm the Android target still compiles, e.g."
-               echo "  cargo check -p geph5-app -p geph5-client --target aarch64-linux-android" ;;
+               echo "  cd $target && cargo check -p geph5-app -p geph5-client --target aarch64-linux-android" ;;
     esac
     exit 0
 fi

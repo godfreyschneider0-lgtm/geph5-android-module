@@ -16,7 +16,7 @@ patch hunk, that step is wrong — re-derive instead (§6).
  ┌────────────────────────────────────────────┐    ┌──────────────────────────┐
  │ android/         module scripts, templates │    │ pristine history         │
  │ patches/         9 patches + BASE + prose  │    │ (never edited by us)     │
- │ apply-patches.sh applies series ───────────┼───▶│ upstream/ submodule      │
+ │ apply-patches.sh applies series ───────────┼───▶│ upstream/ pristine clone │
  │ patches/regenerate.sh  re-exports series   │    │ pinned at patches/BASE   │
  └────────────────────────────────────────────┘    └──────────────────────────┘
 ```
@@ -29,7 +29,8 @@ patch hunk, that step is wrong — re-derive instead (§6).
 
 Two trees matter and they are not the same thing:
 
-- **`upstream/` (the submodule)** — pristine upstream at the pinned commit;
+- **`upstream/` (a plain, gitignored clone)** — pristine upstream at the pinned
+  commit;
   `apply-patches.sh` writes our delta into its *working tree* to produce a
   buildable tree. It is scratch: reset it any time (§4).
 - **The fork history of this repo** — the permanent record of "upstream + our
@@ -90,41 +91,29 @@ git diff <base>..HEAD -- <that patch's file>
 run **in this repo**, against the commit currently checked out. Consequences:
 
 1. **HEAD must be a full-tree commit** whose tree is "the new base plus our
-   delta" — call it the *fork tip*. Today that is `main` at `7f7cf1d`.
+   delta" — call it the *fork tip*. That is `main`.
 2. **Never bump BASE and regenerate before absorbing the new base into the fork
    tip.** If HEAD still carries the old base, `git diff <new-base>..HEAD`
    includes *reversals of upstream's changes* — verified: regenerating against
-   `55dcced` with the current tip produces patches that downgrade
+   `55dcced` with a pre-merge tip produces patches that downgrade
    `geph5-broker-protocol` 0.4.3 → 0.4.0 and friends. The series would apply,
    build, and silently revert upstream's release.
-3. **A tree-less HEAD breaks regeneration.** As of this writing there is a
-   *staged but uncommitted* conversion that deletes `binaries/`, `libraries/`,
-   `Cargo.toml`, … from the tip and keeps only `upstream/` as a submodule
-   (233 files, −157k lines). If that diff is committed as-is, rule 1 stops
-   holding: `git diff <base>..HEAD -- <path>` degenerates to whole-file
-   deletions and `regenerate.sh` exports garbage. Pick one of two clean states
-   before syncing:
+3. **A tree-less HEAD breaks regeneration.** `git diff <base>..HEAD -- <path>`
+   degenerates to whole-file deletions and `regenerate.sh` exports garbage.
 
-   - **Option A (keep the submodule tip).** Commit the conversion, then
-     `git branch fork 7f7cf1d` — the last full-tree commit. All series work
-     (merges, edits, regeneration) happens on `fork`; publish only `patches/`
-     back to `main`:
+**Chosen layout (2026-10-06): the full-tree tip — `main` *is* the fork tip.**
+The repo deliberately carries the whole geph5 workspace at its root: the
+other 224 files are never compiled, but they make the tree readable
+("what does upstream actually look like?") and they are what
+`regenerate.sh` diffs against. `upstream/` is **not** a submodule — it is a
+plain, gitignored pristine clone used as the build input, pinned by
+convention to `patches/BASE` (the build scripts bootstrap it automatically on
+first use and apply the series to it). The rejected alternative — a
+submodule-only tip plus a `fork` branch carrying the tree — is documented
+here so nobody re-proposes it casually: it mechanically pins the upstream
+checkout, but costs a two-branch publish ritual for every series change.
 
-     ```bash
-     git switch fork
-     # ...sync or edit, regenerate...
-     git switch main
-     git checkout fork -- patches
-     git add patches && git commit
-     ```
-
-   - **Option B (keep the full-tree tip).** Drop the staged conversion
-     (`git restore --staged . && git checkout -- .`), delete `.gitmodules`,
-     and add `/upstream/` to `.gitignore` so the pristine clone is just a
-     plain ignored directory. `main` remains the fork tip.
-
-   Either is fine; what is not fine is regenerating while the checkout is
-   mid-transition. `git status` must be clean before §5 step 3.
+`git status` must be clean before §5 step 3.
 
 ## 4. Day-to-day cheat sheet
 
@@ -150,7 +139,7 @@ so re-running after a mid-series failure resumes instead of duplicating.
 
 Module versioning is derived, not typed: `VERSION` comes from
 `upstream/Cargo.toml`'s workspace version and `VERSIONCODE` from
-`git -C upstream rev-list --count HEAD` — both follow the submodule checkout,
+`git -C upstream rev-list --count HEAD` — both follow the upstream/ checkout,
 so a synced release needs no manual version edits. The one record a sync must
 update by hand is the app-tag mapping: the version ledger at the end of §5.
 
@@ -255,7 +244,7 @@ Optionally prove the series faithful (§7) before shipping. Artifacts land in
 ### Step 6 — record the sync
 
 Module artifacts need nothing here: `module.prop` and the zip names derive
-from the submodule checkout automatically (§4). Two human records do:
+from the upstream/ checkout automatically (§4). Two human records do:
 
 1. Append a row to the version ledger below.
 2. Refresh the current-pin sentences in `README.md` ("Which version is
