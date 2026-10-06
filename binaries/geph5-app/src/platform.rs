@@ -310,9 +310,12 @@ mod linux {
     // ---- KDE via kioslaverc ----
 
     fn apply_kde(connected: bool, url: &str) -> anyhow::Result<()> {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("no HOME")?;
+        // No HOME means no desktop session at all (Android, headless root
+        // services): no KDE to configure, so skip rather than fail.
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            tracing::debug!("no HOME; skipping KDE proxy");
+            return Ok(());
+        };
         let config = home.join(".config");
         let rc = config.join("kioslaverc");
         // Only touch KDE config if KDE is actually present, to avoid littering.
