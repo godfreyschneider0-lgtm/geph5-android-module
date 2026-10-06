@@ -16,7 +16,7 @@ rewrite that aims to **simplify and massively clean up the design**.
 ./android/build-module.sh --skip-build     # reuse binaries, repackage only
 ```
 
-Artifacts land in `android/dist/geph5-ksu-v0.3.9-{arm64,x64}.zip`.
+Artifacts land in `android/dist/geph5-ksu-v0.4.2-{arm64,x64}.zip`.
 
 ### Install (three ways)
 
@@ -25,7 +25,7 @@ Artifacts land in `android/dist/geph5-ksu-v0.3.9-{arm64,x64}.zip`.
 2. **One-shot ADB install** (auto-detects ksud / magisk / apd):
 
    ```bash
-   ./android/install.sh android/dist/geph5-ksu-v0.3.9-arm64.zip
+   ./android/install.sh android/dist/geph5-ksu-v0.4.2-arm64.zip
    ```
 
 3. **Magisk CLI**: `adb push ... /data/local/tmp/ && adb shell su -c 'magisk --install-module /data/local/tmp/geph5-ksu.zip'`
