@@ -4,9 +4,9 @@ Geph5 on Android, two install modes from one source tree:
 
 1. **Termux service (no root)** — `geph5 manager` runs as the Termux user
    under termux-services (runit) supervision, autostarting via Termux:Boot.
-   Install as a deb (`./android/termux/build-deb.sh` on-device, then
-   `pkg install ./android/dist/geph5_*.deb`, deps auto-resolved) or from
-   source. See [android/termux/README.md](android/termux/README.md).
+   Install the deb that `./android/build-module.sh` produces on the desktop
+   (`pkg install ./geph5_*.deb`, deps auto-resolved) or install from source.
+   See [android/termux/README.md](android/termux/README.md).
 
 2. **KernelSU / Magisk / APatch root module** — `geph5 manager` runs as root
    at boot via `service.sh`; controlled with `gephctl` through `su`.
@@ -32,17 +32,24 @@ cd geph5-android-module
 ./android/build-module.sh                # bootstraps upstream/, applies patches, builds, packages
 ```
 
-Artifacts land in `android/dist/geph5-ksu-v<geph5-version>-{arm64,x64}.zip`.
+Artifacts land in `android/dist/`: the root-module zips
+`geph5-ksu-v<geph5-version>-{arm64,x64}.zip` and, per arch, the Termux deb
+`geph5_<version>-1_{aarch64,x86_64}.deb`.
 
-### Termux deb (built on-device)
+### Termux deb (install the desktop-built package)
 
 ```bash
-pkg install rust dpkg termux-services   # once; also install the Termux:Boot app
-git clone <this repo> && cd geph5-android-module
-./android/termux/build-deb.sh           # bootstraps upstream/, applies patches, builds natively, packs the deb
-pkg install ./android/dist/geph5_*.deb
+# desktop already produced it alongside the zips:
+adb push android/dist/geph5_0.4.2-1_aarch64.deb /data/local/tmp/
+# in Termux (also install the Termux:Boot app once):
+pkg install /data/local/tmp/geph5_0.4.2-1_aarch64.deb
 gephsvc login && gephsvc connect         # socks5 127.0.0.1:9929, http 127.0.0.1:9930
 ```
+
+(Rebuilding the deb on-device is possible for development:
+`pkg install rust dpkg termux-services` then
+`bash ./android/termux/build-deb.sh` in a repo checkout — but the desktop
+build already packages the deb with the same cross binaries.)
 
 ### Build options
 

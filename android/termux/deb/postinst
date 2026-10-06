@@ -60,12 +60,28 @@ if [ -f "$PREFIX/bin/gephctl" ] && grep -q "Termux service install" "$PREFIX/bin
   rm -f "$PREFIX/bin/gephctl"
 fi
 
-# 5. Start (or restart after upgrade). profile.d starts service-daemon for
+# 5. A stale runsv whose supervise/ state was wiped from under it (e.g. by a
+#    pre-fix upgrade that ran postrm's cleanup unconditionally) can neither be
+#    controlled via sv nor trusted; kill it and runsvdir respawns a clean one
+#    within its ~5 s scan.
+if [ -e "$SVDIR/geph5" ] && [ ! -e "$PREFIX/sv/geph5/supervise/ok" ]; then
+  pgrep -f "runsv geph5" | xargs -r kill 2>/dev/null || true
+fi
+
+# 6. Start (or restart after upgrade). profile.d starts service-daemon for
 #    interactive shells; start it ourselves when installing headlessly.
 if ! pgrep -x runsvdir >/dev/null 2>&1; then
   "$PREFIX/bin/service-daemon" start >/dev/null 2>&1 || true
   sleep 1
 fi
+# Wait for a healthy runsv before flipping the service up: a respawned
+# supervisor needs runsvdir's next scan.
+i=0
+while [ "$i" -lt 10 ]; do
+  [ -e "$PREFIX/sv/geph5/supervise/ok" ] && break
+  sleep 1
+  i=$((i + 1))
+done
 [ -x "$PREFIX/bin/sv" ] && "$PREFIX/bin/sv" up geph5 >/dev/null 2>&1 || true
 
 echo ""

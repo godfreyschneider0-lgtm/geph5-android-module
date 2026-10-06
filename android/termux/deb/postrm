@@ -2,6 +2,10 @@
 # geph5 postrm: unlink the service from SVDIR; clean supervision state.
 # On purge, also delete the user's data (~/.geph5: settings + cache).
 
+# dpkg calls postrm with "upgrade <new-version>" while the replacement is
+# already unpacked; in that case the running supervisor must not be touched.
+[ "$1" = "remove" ] || [ "$1" = "purge" ] || exit 0
+
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 HOME="${HOME:-/data/data/com.termux/files/home}"
 SVDIR="${SVDIR:-$PREFIX/var/service}"

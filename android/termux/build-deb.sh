@@ -73,62 +73,14 @@ else
   (cd "$WORKSPACE" && cargo build --release -p geph5-app -p geph5-client)
 fi
 
-# --- stage --------------------------------------------------------------------
-# Deb data entries are relative to / (Termux prefix has no leading slash).
-STAGE="android/dist/deb-stage"
-PKG="$STAGE/data/data/com.termux/files/usr"
-rm -rf "$STAGE"
-mkdir -p "$PKG/bin" "$PKG/sv/geph5/log" "$PKG/share/doc/geph5" "$STAGE/DEBIAN"
-# Termux's default umask (077) makes these 0700; dpkg-deb requires >=0755.
-chmod 0755 "$STAGE" "$STAGE/DEBIAN"
-# ...and ship every directory with sane 0755 perms, not the local umask's.
-find "$STAGE" -type d -exec chmod 0755 {} +
-
-install -m 0755 "$WORKSPACE/target/release/geph5"        "$PKG/bin/geph5"
-install -m 0755 "$WORKSPACE/target/release/geph5-client" "$PKG/bin/geph5-client"
-install -m 0755 "$SCRIPT_DIR/gephsvc"       "$PKG/bin/gephsvc"
-
-# Same templates as install.sh (single source of truth for the service).
-sed 's|@@PAC_PORT@@|12233|' "$SCRIPT_DIR/sv-run.sh" >"$PKG/sv/geph5/run"
-install -m 0755 "$SCRIPT_DIR/sv-log-run.sh" "$PKG/sv/geph5/log/run"
-chmod 0755 "$PKG/sv/geph5/run"
-
-install -m 0644 "$SCRIPT_DIR/README.md" "$PKG/share/doc/geph5/README.md"
-
-for f in postinst prerm postrm; do
-  install -m 0755 "$SCRIPT_DIR/deb/$f" "$STAGE/DEBIAN/$f"
-done
-
-INSTALLED_SIZE="$(du -sk "$STAGE/data" | cut -f1)"
-
-cat >"$STAGE/DEBIAN/control" <<EOF
-Package: geph5
-Version: $DEB_VERSION
-Architecture: $ARCH
-Maintainer: geph <dev@geph.org>
-Installed-Size: $INSTALLED_SIZE
-Depends: termux-services
-Section: net
-Priority: optional
-Homepage: https://geph.io
-Description: Geph5 anti-censorship network - Termux service install
- Geph5 runs as the Termux user (no root) under termux-services (runit)
- supervision, autostarting at boot via Termux:Boot. Provides local SOCKS5
- (127.0.0.1:9929) and HTTP (127.0.0.1:9930) proxies through the Geph
- network. Control with gephsvc; VPN full-tunnel mode is unsupported on
- Android (proxy mode only, like the root module).
-EOF
-
-# --- pack ---------------------------------------------------------------------
+# --- pack --------------------------------------------------------------------
+# The layout itself lives in pack-deb.sh (shared with android/build-module.sh,
+# which packages the deb for every arch straight from the desktop cross build).
 DEB="android/dist/geph5_${DEB_VERSION}_${ARCH}.deb"
-rm -f "$DEB"
-dpkg-deb --build --root-owner-group "$STAGE" "$DEB"
-
-echo
-echo "=== built: $DEB ($(wc -c <"$DEB") bytes) ==="
-dpkg-deb -I "$DEB" | sed -n '1,12p'
-echo "--- contents:"
-dpkg-deb -c "$DEB" | awk '{print $1, $6}' | sed 's|^|  |'
+bash "$SCRIPT_DIR/pack-deb.sh" \
+    --bin-dir "$WORKSPACE/target/release" \
+    --arch "$ARCH" --version "$VERSION" --out "$DEB"
+rm -rf android/dist/deb-stage        # staging dir of pre-refactor builds
 
 echo
 echo "Install:  pkg install $DEB"

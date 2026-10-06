@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 #
-# build-module.sh - one-click cross-compile + packaging for the geph5 KernelSU module.
+# build-module.sh - one-click cross-compile + packaging for the geph5 KernelSU module
+# and the Termux deb.
 #
 # Cross-compiles geph5 and geph5-client for aarch64-linux-android (arm64) and
 # x86_64-linux-android (x64) using the Android NDK toolchain (API 24), stages
 # the android/ksu/ template files together with the binaries, and packs each
-# into android/dist/geph5-ksu-<version>-<arch>.zip. Each zip root contains
-# module.prop directly, ready for KernelSU.
+# arch into android/dist/geph5-ksu-<version>-<arch>.zip (zip root contains
+# module.prop directly, ready for KernelSU) plus the unprivileged Termux
+# install android/dist/geph5_<version>-1_<dpkg-arch>.deb via
+# android/termux/pack-deb.sh.
 #
 # The Rust source is the upstream/ pristine clone; this script applies patches/ to it
 # before building, so a plain checkout of this repo builds without any manual
@@ -183,7 +186,21 @@ build_one() {
   ZIP="$DIST/geph5-ksu-${VERSION}-$ZLAB.zip"
   rm -f "$ZIP"
   (cd "$STAGE" && zip -r9 -q "../$(basename "$ZIP")" .)
+
+  # --- Termux deb (same binaries, unprivileged install) ---------------------
+  # stdout of this function is captured by the caller; keep pack-deb's chatter
+  # on stderr.
+  case "$ZLAB" in
+    arm64) DEB_ARCH=aarch64 ;;
+    x64)   DEB_ARCH=x86_64 ;;
+  esac
+  DEB="$DIST/geph5_${VERSION#v}-1_${DEB_ARCH}.deb"
+  bash "$SCRIPT_DIR/termux/pack-deb.sh" \
+      --bin-dir "$RELDIR" --arch "$DEB_ARCH" \
+      --version "${VERSION#v}" --out "$DEB" >&2
+
   echo "$ZIP"
+  echo "$DEB" >&2
 }
 
 echo "Building arches: $BUILD_LIST"
@@ -203,12 +220,18 @@ sha() {
 }
 
 echo
-echo "=== geph5 KernelSU modules built ==="
+echo "=== geph5 built: root module zips + Termux debs ==="
 for z in $ZIPS; do
   echo "Zip:     $z ($(bytes "$z") bytes)"
   echo "SHA256:  $(sha "$z")"
+done
+for d in android/dist/geph5_*-1_*.deb; do
+  [ -f "$d" ] || continue
+  echo "Deb:     $d ($(bytes "$d") bytes)"
 done
 echo
 echo "Next steps:"
 echo "  1. ADB:          ./android/install.sh android/dist/geph5-ksu-${VERSION}-<arch>.zip"
 echo "  2. KernelSU app: KernelSU manager -> Install from storage -> pick the matching arch zip"
+echo "  3. Termux:       adb push android/dist/geph5_*-1_aarch64.deb /data/local/tmp/"
+echo "                   then in Termux: pkg install /data/local/tmp/geph5_*_aarch64.deb"
