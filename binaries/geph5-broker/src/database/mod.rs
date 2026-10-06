@@ -12,7 +12,9 @@ use crate::CONFIG_FILE;
 pub(super) static POSTGRES: LazyLock<PgPool> = LazyLock::new(|| {
     PoolOptions::new()
         .max_connections(150)
-        .acquire_timeout(Duration::from_secs(1))
+        // Acquisition also covers opening a connection, which can take several
+        // seconds after database recovery, including during broker startup.
+        .acquire_timeout(Duration::from_secs(10))
         .max_lifetime(Duration::from_secs(30))
         .test_before_acquire(false)
         .connect_lazy_with({
@@ -43,6 +45,9 @@ pub async fn database_gc_loop() -> anyhow::Result<()> {
             .execute(&*POSTGRES)
             .await?;
         tracing::debug!(rows_affected = res.rows_affected(), "cleaned up bridges");
+        sqlx::query("DELETE FROM auth_secret_recovery WHERE expires_at <= clock_timestamp()")
+            .execute(&*POSTGRES)
+            .await?;
         // NOTE: spent_bw_tokens is intentionally never garbage-collected. The
         // bandwidth tokens are blind-signed by a single, non-rotating key and
         // carry no epoch/expiry, so a (token, sig) pair stays valid forever.
