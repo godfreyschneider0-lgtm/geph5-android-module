@@ -17,3 +17,13 @@ upstream restructures the socket constants themselves.
 
 android_state_dir() needs libc::geteuid(); the android-only libc dependency
 lives in patch 0007.
+
+--- Linux side-by-side (added with the Nix build, 2026-11) ---
+The Linux arm also honours GEPH5_STATE_DIR now, for the same reason Android
+needed it: a second geph5 install on one Linux host (the Termux deployment
+model ported to desktop, e.g. the android-module fork's Nix build beside the
+official package) would otherwise fight over the single /run/geph/control.sock
+— whichever manager binds first wins and the other dies with EADDRINUSE.
+With the variable set the socket lives at $GEPH5_STATE_DIR/control.sock; the
+default path is byte-identical when unset, so official installs are
+untouched. The engine-side counterpart (state/runtime dirs) is patch 0006.

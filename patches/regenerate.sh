@@ -55,8 +55,6 @@ declare -A TARGETS=(
     [0007-geph5-misc-rpc-cargo-libc-android]=libraries/geph5-misc-rpc/Cargo.toml
     [0008-geph5-app-supervisor-pac-port]=binaries/geph5-app/src/supervisor.rs
     [0009-geph5-app-manager-pac-caller]=binaries/geph5-app/src/manager.rs
-    [0010-geph5-misc-rpc-state-dir-linux-sock]=libraries/geph5-misc-rpc/src/manager_control.rs
-    [0011-geph5-app-platform-state-dir-linux]=binaries/geph5-app/src/platform.rs
 )
 
 dirty=0

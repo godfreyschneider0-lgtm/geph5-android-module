@@ -37,3 +37,16 @@ upstream has touched it 8 times since 2025 (most recently 2026-08-24, in the
 with patches/regenerate.sh, because the cfg attributes move whenever upstream
 moves the code they guard, and a manual fix-up can leave a tree that compiles
 while targeting the wrong platform.
+
+--- Linux side-by-side (added with the Nix build, 2026-11) ---
+state_dir() and runtime_dir() also follow GEPH5_STATE_DIR on Linux, the
+engine-side counterpart of the socket override in patch 0002: settings.json,
+the cache, manager.log and the engine/engine.sock IPC socket all relocate
+under the override, so a side-by-side install (shifted ports: SOCKS5/HTTP
+via settings.json proxy.socks5_port/http_port, PAC via GEPH5_PAC_PORT from
+patch 0008) never collides with /var/lib/geph or /run/geph of the official
+install. Defaults are byte-identical with the variable unset.
+
+Deliberately not segregated: the VPN-plane globals (nft table "geph",
+TUN_IFACE, ip rules) — two installs are expected to run proxy mode only;
+full-tunnel on both would fight over the kill switch regardless of paths.

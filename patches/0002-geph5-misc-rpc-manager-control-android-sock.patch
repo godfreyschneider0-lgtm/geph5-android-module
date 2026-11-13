@@ -18,14 +18,24 @@ upstream restructures the socket constants themselves.
 android_state_dir() needs libc::geteuid(); the android-only libc dependency
 lives in patch 0007.
 
+--- Linux side-by-side (added with the Nix build, 2026-11) ---
+The Linux arm also honours GEPH5_STATE_DIR now, for the same reason Android
+needed it: a second geph5 install on one Linux host (the Termux deployment
+model ported to desktop, e.g. the android-module fork's Nix build beside the
+official package) would otherwise fight over the single /run/geph/control.sock
+— whichever manager binds first wins and the other dies with EADDRINUSE.
+With the variable set the socket lives at $GEPH5_STATE_DIR/control.sock; the
+default path is byte-identical when unset, so official installs are
+untouched. The engine-side counterpart (state/runtime dirs) is patch 0006.
+
 ---
- 1 file changed, 47 insertions(+), 6 deletions(-)
+ 1 file changed, 56 insertions(+), 6 deletions(-)
 
 diff --git a/libraries/geph5-misc-rpc/src/manager_control.rs b/libraries/geph5-misc-rpc/src/manager_control.rs
-index 62f5916..cac325a 100644
+index 62f5916..dcfca98 100644
 --- a/libraries/geph5-misc-rpc/src/manager_control.rs
 +++ b/libraries/geph5-misc-rpc/src/manager_control.rs
-@@ -9,16 +9,57 @@
+@@ -9,16 +9,66 @@
  //! status/stats/exits/logs through to the child's own control protocol.
  
  use async_trait::async_trait;
@@ -47,6 +57,15 @@ index 62f5916..cac325a 100644
 +    }
 +    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
 +    {
++        // GEPH5_STATE_DIR lets a second install run beside the official one
++        // (the Termux-style side-by-side deployment, on a Linux host that
++        // already runs the stock geph5): without an override both managers
++        // would fight over the single /run/geph/control.sock.
++        if let Some(dir) = std::env::var_os("GEPH5_STATE_DIR")
++            && !dir.is_empty()
++        {
++            return PathBuf::from(dir).join("control.sock");
++        }
 +        PathBuf::from("/run/geph/control.sock")
 +    }
 +    // Android has no writable /run; the socket lives in the resolved state
@@ -88,7 +107,7 @@ index 62f5916..cac325a 100644
  /// Name of the manager's control named pipe.
  #[cfg(windows)]
  pub const MANAGER_CONTROL_PIPE: &str = r"\\.\pipe\geph-manager-control";
-@@ -35,7 +76,7 @@ pub fn manager_control_transport() -> ManagerTransport {
+@@ -35,7 +85,7 @@ pub fn manager_control_transport() -> ManagerTransport {
      #[cfg(unix)]
      {
          nanorpc_sillad::DialerTransport(sillad::unix::UnixDialer {

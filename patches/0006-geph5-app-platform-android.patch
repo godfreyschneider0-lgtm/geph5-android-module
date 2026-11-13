@@ -38,11 +38,24 @@ with patches/regenerate.sh, because the cfg attributes move whenever upstream
 moves the code they guard, and a manual fix-up can leave a tree that compiles
 while targeting the wrong platform.
 
+--- Linux side-by-side (added with the Nix build, 2026-11) ---
+state_dir() and runtime_dir() also follow GEPH5_STATE_DIR on Linux, the
+engine-side counterpart of the socket override in patch 0002: settings.json,
+the cache, manager.log and the engine/engine.sock IPC socket all relocate
+under the override, so a side-by-side install (shifted ports: SOCKS5/HTTP
+via settings.json proxy.socks5_port/http_port, PAC via GEPH5_PAC_PORT from
+patch 0008) never collides with /var/lib/geph or /run/geph of the official
+install. Defaults are byte-identical with the variable unset.
+
+Deliberately not segregated: the VPN-plane globals (nft table "geph",
+TUN_IFACE, ip rules) — two installs are expected to run proxy mode only;
+full-tunnel on both would fight over the kill switch regardless of paths.
+
 ---
- 1 file changed, 57 insertions(+), 27 deletions(-)
+ 1 file changed, 72 insertions(+), 27 deletions(-)
 
 diff --git a/binaries/geph5-app/src/platform.rs b/binaries/geph5-app/src/platform.rs
-index befe6c6..27e2c63 100644
+index befe6c6..7e80a8c 100644
 --- a/binaries/geph5-app/src/platform.rs
 +++ b/binaries/geph5-app/src/platform.rs
 @@ -36,7 +36,7 @@ pub(crate) fn set_system_proxy(
@@ -115,7 +128,7 @@ index befe6c6..27e2c63 100644
  use std::path::Path;
  use std::{
      path::PathBuf,
-@@ -672,6 +675,13 @@ pub(crate) struct SpawnedEngine {
+@@ -672,8 +675,23 @@ pub(crate) struct SpawnedEngine {
  }
  
  pub(crate) fn state_dir() -> PathBuf {
@@ -128,8 +141,18 @@ index befe6c6..27e2c63 100644
 +    }
      #[cfg(target_os = "linux")]
      {
++        // GEPH5_STATE_DIR, mirroring the Android resolver: a side-by-side
++        // install keeps its settings, cache and logs away from /var/lib/geph
++        // (which belongs to the official install).
++        if let Some(dir) = std::env::var_os("GEPH5_STATE_DIR")
++            && !dir.is_empty()
++        {
++            return PathBuf::from(dir);
++        }
          PathBuf::from("/var/lib/geph")
-@@ -696,6 +706,12 @@ pub(crate) fn manager_log_path() -> PathBuf {
+     }
+     #[cfg(target_os = "macos")]
+@@ -696,8 +714,21 @@ pub(crate) fn manager_log_path() -> PathBuf {
  
  #[allow(dead_code)]
  fn runtime_dir() -> PathBuf {
@@ -141,8 +164,17 @@ index befe6c6..27e2c63 100644
 +    }
      #[cfg(target_os = "linux")]
      {
++        // Follows the state-dir override so a side-by-side install's engine
++        // socket never collides with /run/geph of the official install.
++        if let Some(dir) = std::env::var_os("GEPH5_STATE_DIR")
++            && !dir.is_empty()
++        {
++            return PathBuf::from(dir).join("run");
++        }
          PathBuf::from("/run/geph")
-@@ -729,7 +745,7 @@ fn engine_control_path(role: EngineRole) -> PathBuf {
+     }
+     #[cfg(target_os = "macos")]
+@@ -729,7 +760,7 @@ fn engine_control_path(role: EngineRole) -> PathBuf {
  }
  
  pub(crate) fn current_session() -> SessionContext {
@@ -151,7 +183,7 @@ index befe6c6..27e2c63 100644
      {
          SessionContext {
              uid: unsafe { libc::geteuid() },
-@@ -753,6 +769,15 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
+@@ -753,6 +784,15 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
          }
          Ok(())
      }
@@ -167,7 +199,7 @@ index befe6c6..27e2c63 100644
      #[cfg(target_os = "windows")]
      {
          use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-@@ -787,7 +812,7 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
+@@ -787,7 +827,7 @@ pub(crate) fn require_manager_privilege() -> anyhow::Result<()> {
  }
  
  pub(crate) async fn shutdown_signal() {
@@ -176,7 +208,7 @@ index befe6c6..27e2c63 100644
      {
          use tokio::signal::unix::{SignalKind, signal};
          async fn on(kind: SignalKind) {
-@@ -813,7 +838,7 @@ pub(crate) async fn shutdown_signal() {
+@@ -813,7 +853,7 @@ pub(crate) async fn shutdown_signal() {
  
  pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
      config.control_listen = None;
@@ -185,7 +217,7 @@ index befe6c6..27e2c63 100644
      {
          config.control_listen_unix = Some(engine_control_path(role));
      }
-@@ -825,7 +850,7 @@ pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
+@@ -825,7 +865,7 @@ pub(crate) fn configure_engine_control(config: &mut Config, role: EngineRole) {
  }
  
  pub(crate) fn engine_control(role: EngineRole) -> ControlClient {
@@ -194,7 +226,7 @@ index befe6c6..27e2c63 100644
      let dialer = nanorpc_sillad::DialerTransport(sillad::unix::UnixDialer {
          path: engine_control_path(role),
      });
-@@ -848,10 +873,10 @@ pub(crate) async fn serve_manager<R>(manager: ManagerImpl, on_ready: R) -> anyho
+@@ -848,10 +888,10 @@ pub(crate) async fn serve_manager<R>(manager: ManagerImpl, on_ready: R) -> anyho
  where
      R: FnOnce() + Send + 'static,
  {
@@ -207,7 +239,7 @@ index befe6c6..27e2c63 100644
          if let Some(dir) = path.parent() {
              std::fs::create_dir_all(dir)?;
          }
-@@ -879,6 +904,11 @@ where
+@@ -879,6 +919,11 @@ where
  }
  
  pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
@@ -219,7 +251,7 @@ index befe6c6..27e2c63 100644
      #[cfg(target_os = "linux")]
      {
          const USER: &str = "geph5-daemon";
-@@ -945,7 +975,7 @@ pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
+@@ -945,7 +990,7 @@ pub(crate) fn ensure_service_user() -> anyhow::Result<Option<(u32, u32)>> {
      }
  }
  
@@ -228,7 +260,7 @@ index befe6c6..27e2c63 100644
  fn lookup_user(name: &str) -> Option<(u32, u32)> {
      let name = std::ffi::CString::new(name).ok()?;
      unsafe {
-@@ -971,7 +1001,7 @@ fn run_status(program: &str, args: &[&str]) -> anyhow::Result<()> {
+@@ -971,7 +1016,7 @@ fn run_status(program: &str, args: &[&str]) -> anyhow::Result<()> {
  }
  
  fn engine_binary_name() -> &'static str {
@@ -237,7 +269,7 @@ index befe6c6..27e2c63 100644
      {
          "geph5-client"
      }
-@@ -1002,7 +1032,7 @@ pub(crate) fn engine_bin_path() -> PathBuf {
+@@ -1002,7 +1047,7 @@ pub(crate) fn engine_bin_path() -> PathBuf {
  }
  
  fn engine_command() -> anyhow::Result<Command> {
@@ -246,7 +278,7 @@ index befe6c6..27e2c63 100644
      let path = engine_bin_path();
      #[cfg(target_os = "macos")]
      let path = staged_engine_bin()?;
-@@ -1059,7 +1089,7 @@ fn staged_engine_bin() -> anyhow::Result<PathBuf> {
+@@ -1059,7 +1104,7 @@ fn staged_engine_bin() -> anyhow::Result<PathBuf> {
  }
  
  pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
@@ -255,7 +287,7 @@ index befe6c6..27e2c63 100644
      {
          spawn_engine_posix(launch)
      }
-@@ -1069,7 +1099,7 @@ pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine
+@@ -1069,7 +1114,7 @@ pub(crate) fn spawn_engine(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine
      }
  }
  
@@ -264,7 +296,7 @@ index befe6c6..27e2c63 100644
  fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
      use std::os::unix::process::CommandExt;
  
-@@ -1118,7 +1148,7 @@ fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
+@@ -1118,7 +1163,7 @@ fn spawn_engine_posix(launch: EngineLaunch) -> anyhow::Result<SpawnedEngine> {
      })
  }
  
@@ -273,7 +305,7 @@ index befe6c6..27e2c63 100644
  fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std::io::Result<()> {
      let error = std::io::Error::last_os_error;
      if let Some((uid, gid)) = service_user {
-@@ -1134,19 +1164,19 @@ fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std:
+@@ -1134,19 +1179,19 @@ fn child_pre_exec(service_user: Option<(u32, u32)>, vpn_fd: Option<i32>) -> std:
      {
          return Err(error());
      }
@@ -296,7 +328,7 @@ index befe6c6..27e2c63 100644
  fn chown_recursive(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
      let metadata = std::fs::symlink_metadata(path)?;
      chown_path(path, uid, gid)?;
-@@ -1374,7 +1404,7 @@ fn wait_for_processes(processes: &[ProcessWaitHandle]) -> anyhow::Result<()> {
+@@ -1374,7 +1419,7 @@ fn wait_for_processes(processes: &[ProcessWaitHandle]) -> anyhow::Result<()> {
  }
  
  pub(crate) fn register_manager() -> anyhow::Result<()> {
@@ -305,7 +337,7 @@ index befe6c6..27e2c63 100644
      {
          const NAME: &str = "geph-manager.service";
          const PATH: &str = "/etc/systemd/system/geph-manager.service";
-@@ -1454,7 +1484,7 @@ pub(crate) fn register_manager() -> anyhow::Result<()> {
+@@ -1454,7 +1499,7 @@ pub(crate) fn register_manager() -> anyhow::Result<()> {
  }
  
  pub(crate) fn unregister_manager() -> anyhow::Result<()> {
@@ -314,7 +346,7 @@ index befe6c6..27e2c63 100644
      {
          const NAME: &str = "geph-manager.service";
          const PATH: &str = "/etc/systemd/system/geph-manager.service";
-@@ -1516,7 +1546,7 @@ pub(crate) fn unregister_manager() -> anyhow::Result<()> {
+@@ -1516,7 +1561,7 @@ pub(crate) fn unregister_manager() -> anyhow::Result<()> {
      }
  }
  
