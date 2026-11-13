@@ -22,6 +22,15 @@ pub fn manager_control_sock() -> PathBuf {
     }
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
     {
+        // GEPH5_STATE_DIR lets a second install run beside the official one
+        // (the Termux-style side-by-side deployment, on a Linux host that
+        // already runs the stock geph5): without an override both managers
+        // would fight over the single /run/geph/control.sock.
+        if let Some(dir) = std::env::var_os("GEPH5_STATE_DIR")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir).join("control.sock");
+        }
         PathBuf::from("/run/geph/control.sock")
     }
     // Android has no writable /run; the socket lives in the resolved state

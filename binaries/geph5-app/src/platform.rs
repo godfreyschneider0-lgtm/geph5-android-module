@@ -684,6 +684,14 @@ pub(crate) fn state_dir() -> PathBuf {
     }
     #[cfg(target_os = "linux")]
     {
+        // GEPH5_STATE_DIR, mirroring the Android resolver: a side-by-side
+        // install keeps its settings, cache and logs away from /var/lib/geph
+        // (which belongs to the official install).
+        if let Some(dir) = std::env::var_os("GEPH5_STATE_DIR")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir);
+        }
         PathBuf::from("/var/lib/geph")
     }
     #[cfg(target_os = "macos")]
@@ -714,6 +722,13 @@ fn runtime_dir() -> PathBuf {
     }
     #[cfg(target_os = "linux")]
     {
+        // Follows the state-dir override so a side-by-side install's engine
+        // socket never collides with /run/geph of the official install.
+        if let Some(dir) = std::env::var_os("GEPH5_STATE_DIR")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir).join("run");
+        }
         PathBuf::from("/run/geph")
     }
     #[cfg(target_os = "macos")]

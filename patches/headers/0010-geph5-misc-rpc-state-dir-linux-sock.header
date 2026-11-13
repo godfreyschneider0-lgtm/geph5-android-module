@@ -1,0 +1,20 @@
+Subject: [PATCH 10/11] geph5-misc-rpc: GEPH5_STATE_DIR override for the Linux control socket
+
+The Linux arm of manager_control_sock() was the only hardcoded
+/run/geph/control.sock, so a second geph5 install on one Linux host could
+never run beside the official one: whichever manager bound the socket first
+won, and the other died with EADDRINUSE. The Android arm already solves this
+exact problem for the root-module/Termux pair with GEPH5_STATE_DIR; this
+widens that override to Linux so the same side-by-side deployment works on a
+desktop (e.g. the android-module fork's Nix build running next to the stock
+geph5, on shifted ports, the way android/termux/ shifts 9909/9910/12223 to
+9929/9930/12233).
+
+Additive env-gated arm ahead of the existing constant; the default path is
+byte-identical when the variable is unset, so official installs are
+untouched. Fragility is low: it only conflicts if upstream restructures the
+socket constants themselves, in which case patch 0002 is in trouble too.
+
+Deliberately not done: no per-field config file for the socket (env + state
+dir is what Android uses; two mechanisms would drift), and macOS keeps its
+/var/run path (no side-by-side story there).
