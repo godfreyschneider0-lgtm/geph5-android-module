@@ -1,4 +1,6 @@
 /android/dist/
+/nix/dist/
+/nix/result
 /upstream/
 /target/
 .omo/

@@ -36,6 +36,17 @@ Artifacts land in `android/dist/`: the root-module zips
 `geph5-ksu-v<geph5-version>-{arm64,x64}.zip` and, per arch, the Termux deb
 `geph5_<version>-1_{aarch64,x86_64}.deb`.
 
+### Linux (Nix, reproducible)
+
+The same tree — pristine upstream pinned by `patches/BASE` plus the `patches/`
+series — also builds for Linux hosts with Nix, from the flake at the repo
+root (`nix/README.md` has the details):
+
+```bash
+nix build .#geph5                  # bin/geph5 + bin/geph5-client into ./result
+./nix/build-nix.sh                 # one-shot: build + tarball into nix/dist/
+```
+
 ### Termux deb (install the desktop-built package)
 
 ```bash
@@ -111,6 +122,7 @@ Full details: [android/ksu/README.md](android/ksu/README.md).
 |---|---|
 | `android/` | the module: build, install, `service.sh`, `gephctl`, zip templates |
 | `android/termux/` | the no-root Termux install: deb packaging, `gephsvc`, runit service |
+| `nix/` | the Linux Nix build: flake package, one-shot `build-nix.sh` |
 | `upstream/` | pristine geph5 clone (gitignored, auto-bootstrapped, pinned by `patches/BASE`); **not** ours to edit |
 | `patches/` | our changes to upstream files, as a patch series |
 | `apply-patches.sh` | applies the series to `upstream/`; idempotent |

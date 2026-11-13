@@ -236,7 +236,14 @@ git diff -- patches/
 
 ```bash
 ./android/build-module.sh             # VERSION/VERSIONCODE follow the checkout
+nix build .#geph5                     # Linux side of the same series
 ```
+
+The Nix build re-applies the whole series with `git apply` in a clean sandbox,
+so it doubles as an independent check that the regenerated patches still land
+exactly; it also validates the merged `Cargo.lock` via `--locked`. After a BASE
+bump the first run fails on the source hash — paste the `got: sha256-…` into
+`upstreamHash` in `flake.nix` (see `nix/README.md#updating`) and rebuild.
 
 Optionally prove the series faithful (§7) before shipping. Artifacts land in
 `android/dist/geph5-ksu-<version>-{arm64,x64}.zip`.
