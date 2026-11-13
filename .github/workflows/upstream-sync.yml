@@ -1,0 +1,283 @@
+name: upstream-sync
+
+# Automated half of MAINTENANCE.md §5 (upstream sync):
+#
+#   step 0  resolve the newest stable gephgui-pkg tag -> geph5 submodule sha
+#   step 2  triage: apply-patches.sh --check against the new base
+#   step 3  absorb the new base into the fork tip (git merge)
+#   step 4  re-export the patch series (patches/regenerate.sh)
+#   step 5  verify with BOTH builds: nix build .#geph5 (Linux) and
+#           android/build-module.sh (Android, NDK cross-compile)
+#
+# When everything is green it opens a pull request that carries the merge
+# commit, the regenerated patches and the refreshed upstreamHash; review,
+# the §5 step-6 records and the actual merge stay with a human.
+#
+# The parts that cannot be automated are made loud instead: a patch REJECT or
+# a merge conflict fails this workflow (GitHub emails the failure to watchers)
+# and opens a tracking issue quoting the exact patch output.
+#
+# Short-circuits to ~1 minute when patches/BASE already equals the newest
+# stable tag's pin.
+
+on:
+  schedule:
+    - cron: "23 3 * * *" # daily, 03:23 UTC
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "geph5 commit to sync to (defaults to the newest stable app tag's pin)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  GEPH5_URL: https://github.com/geph-official/geph5.git
+  APP_PKG: geph-official/gephgui-pkg
+  NDK_VERSION: r27c
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SUMMARY: /tmp/pr-body.md
+    steps:
+      - name: "Checkout (full history - the merge needs the fork tip)"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "geph5-sync-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # ---- §5 step 0: app tag -> geph5 submodule pin ----------------------
+      - name: Resolve the target base
+        id: resolve
+        env:
+          MANUAL_BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          base="$MANUAL_BASE"
+          if [ -n "$base" ]; then
+            tag="(manual base)"
+          else
+            tag=$(git ls-remote --tags "https://github.com/${APP_PKG}.git" 'refs/tags/v*' \
+              | grep -v '\^{}' | awk -F/ '{print $NF}' | sort -V | tail -1)
+            echo "newest stable app tag: $tag"
+            base=$(curl -fsSL "https://api.github.com/repos/${APP_PKG}/contents/geph5?ref=${tag}" | jq -r .sha)
+            echo "app tag $tag pins geph5 at ${base}"
+          fi
+          cur=$(cat patches/BASE)
+          echo "current patches/BASE: $cur"
+          {
+            echo "base=$base"
+            echo "tag=$tag"
+            echo "uptodate=$([ "$base" = "$cur" ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Nothing to do
+        if: steps.resolve.outputs.uptodate == 'true'
+        run: echo "patches/BASE is already at ${{ steps.resolve.outputs.base }} (${{ steps.resolve.outputs.tag }})."
+
+      # ---- §5 step 1+2: pristine upstream at the new base, triage ---------
+      - name: Triage the patch series against the new base
+        id: triage
+        if: steps.resolve.outputs.uptodate == 'false'
+        env:
+          NEW_BASE: ${{ steps.resolve.outputs.base }}
+        run: |
+          set -euo pipefail
+          git clone "$GEPH5_URL" upstream
+          git -C upstream checkout --quiet "$NEW_BASE"
+          ./apply-patches.sh --check upstream/ | tee /tmp/triage.txt
+
+      - name: Open a tracking issue (series rejected)
+        if: steps.triage.outcome == 'failure'
+        env:
+          NEW_BASE: ${{ steps.resolve.outputs.base }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          title="upstream sync blocked: patch series rejects $TAG ($NEW_BASE)"
+          body="The automated sync (workflow ${{ github.run_id }}) triaged the series with
+          \`apply-patches.sh --check\` and it no longer applies to the new base.
+          Manual §5 conflict path required: merge, resolve (keep our cfg arms merged
+          with their refactor), regenerate.
+
+          \`\`\`
+          $(sed 's/^/  /' /tmp/triage.txt 2>/dev/null || echo "triage log unavailable")
+          \`\`\`
+          See MAINTENANCE.md §5 and §3 (never regenerate before absorbing the base)."
+          num=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${num:-}" ] && [ "$num" != "null" ]; then
+            gh issue comment "$num" --body "Re-tripped by workflow ${{ github.run_id }}."
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+          exit 1
+
+      # ---- §5 step 3: absorb the base into the fork tip -------------------
+      - name: Merge the new base into the fork tip
+        id: merge
+        if: steps.resolve.outputs.uptodate == 'false'
+        env:
+          NEW_BASE: ${{ steps.resolve.outputs.base }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add official "$GEPH5_URL"
+          git fetch official
+          git merge --no-edit -m "Merge upstream geph5 $NEW_BASE (app tag $TAG)
+
+          Automated §5 step 3 (upstream-sync workflow)." "$NEW_BASE" 2>&1 | tee /tmp/merge.txt
+
+      - name: Open a tracking issue (merge conflict)
+        if: steps.merge.outcome == 'failure'
+        env:
+          NEW_BASE: ${{ steps.resolve.outputs.base }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          title="upstream sync blocked: merge conflict on $TAG ($NEW_BASE)"
+          body="The automated merge of the new base into the fork tip conflicted
+          (workflow ${{ github.run_id }}). Manual §5 conflict path required.
+
+          \`\`\`
+          $(git diff --name-only --diff-filter=U | sed 's/^/  conflicted: /')
+          \`\`\`
+          Resolve by keeping our cfg arms merged with their refactor, then
+          \`./patches/regenerate.sh $NEW_BASE\`."
+          num=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number' || true)
+          if [ -n "${num:-}" ] && [ "$num" != "null" ]; then
+            gh issue comment "$num" --body "Re-tripped by workflow ${{ github.run_id }}."
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+          exit 1
+
+      # ---- §5 step 4: re-export the series ---------------------------------
+      - name: Compose the PR body header
+        if: steps.resolve.outputs.uptodate == 'false'
+        env:
+          NEW_BASE: ${{ steps.resolve.outputs.base }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' upstream/Cargo.toml | head -n1)
+          cat > "$SUMMARY" <<EOF
+          Automated upstream sync — MAINTENANCE.md §5 steps 0-5 are done and both
+          builds passed. The human half remains:
+
+          - [ ] review the merge commit and the \`git diff\` on \`patches/\`
+          - [ ] append the version ledger row (§5 step 6)
+          - [ ] refresh the version pins in README.md and patches/README.md
+          - [ ] merge
+
+          | | |
+          |---|---|
+          | app tag | $TAG |
+          | geph5 base | \`$NEW_BASE\` |
+          | crate version | $crate |
+
+          EOF
+
+      - name: Re-export the patch series
+        if: steps.resolve.outputs.uptodate == 'false'
+        env:
+          NEW_BASE: ${{ steps.resolve.outputs.base }}
+        run: |
+          set -euo pipefail
+          ./patches/regenerate.sh "$NEW_BASE"
+          git add patches/BASE patches/*.patch
+          {
+            echo "### Patch series re-export"
+            echo
+            echo '```'
+            git diff --cached --stat -- patches/ | sed 's/^/  /'
+            echo '```'
+          } | tee -a "$SUMMARY"
+
+      # ---- §5 step 5a: the Nix (Linux) build ------------------------------
+      - name: Install Nix
+        if: steps.resolve.outputs.uptodate == 'false'
+        uses: cachix/install-nix-action@v31
+
+      - name: Nix build (auto-refreshing upstreamHash)
+        if: steps.resolve.outputs.uptodate == 'false'
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if out=$(nix build .#geph5 --out-link nix/result -L 2>&1); then
+              break
+            fi
+            got=$(printf '%s\n' "$out" | grep -oE 'got: +sha256-[A-Za-z0-9+/=]+' | awk '{print $2}' | head -n1)
+            if [ -z "$got" ]; then
+              printf '%s\n' "$out" | tail -40
+              echo "::error::nix build failed without a source-hash mismatch to consume"
+              exit 1
+            fi
+            echo "attempt $attempt: refreshing upstreamHash -> $got"
+            sed -i "s#upstreamHash = \"sha256-[A-Za-z0-9+/=]*\"#upstreamHash = \"$got\"#" flake.nix
+          done
+          git add flake.nix
+          echo "### Nix (Linux) build" | tee -a "$SUMMARY"
+          nix/result/bin/geph5 --version | tee -a "$SUMMARY"
+          nix/result/bin/geph5 --help | grep -q register || { echo "::error::register subcommand missing — series not applied?"; exit 1; }
+          ./nix/build-nix.sh --skip-build >/tmp/nixpkg.txt 2>&1 || { cat /tmp/nixpkg.txt; exit 1; }
+          grep -E "Tarball|SHA256" /tmp/nixpkg.txt | tee -a "$SUMMARY"
+
+      # ---- §5 step 5b: the Android (NDK) build ----------------------------
+      - name: Install the Android NDK and rust targets
+        if: steps.resolve.outputs.uptodate == 'false'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          unzip -q /tmp/ndk.zip -d "$HOME"
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install stable rust with the android targets
+        if: steps.resolve.outputs.uptodate == 'false'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Android build
+        if: steps.resolve.outputs.uptodate == 'false'
+        run: |
+          set -euo pipefail
+          ./android/build-module.sh | tee /tmp/android.txt
+          echo "### Android build" | tee -a "$SUMMARY"
+          grep -E "Zip:|Deb:|SHA256:" /tmp/android.txt | tee -a "$SUMMARY"
+
+      - name: Upload artifacts
+        if: steps.resolve.outputs.uptodate == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: geph5-${{ steps.resolve.outputs.tag }}
+          path: |
+            android/dist/*.zip
+            android/dist/*.deb
+            nix/dist/*.tar.xz
+          if-no-files-found: error
+
+      # ---- open the PR for the human half ----------------------------------
+      - name: Open the sync pull request
+        if: steps.resolve.outputs.uptodate == 'false'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: auto/upstream-${{ steps.resolve.outputs.tag }}
+          delete-branch: true
+          title: "sync upstream geph5 ${{ steps.resolve.outputs.base }} (app ${{ steps.resolve.outputs.tag }})"
+          commit-message: "Merge upstream geph5 ${{ steps.resolve.outputs.base }} (app tag ${{ steps.resolve.outputs.tag }}); re-export the patch series"
+          body-path: /tmp/pr-body.md
