@@ -149,12 +149,16 @@ Full rationale, the patch ordering, and the operational traps are in
 
 ### Which version is this?
 
-A Geph *app* release is not a geph5 *crate* version. `gephgui-pkg` tag `v5.9.1`
-pins the core by submodule at `1f65e9e`, whose workspace version is `0.4.2` —
-so the module zip is named `v0.4.2` even though it ships Geph 5.9.1. This
-module tracks stable app tags, never upstream `master`. The authoritative
-current pin and its history are the version ledger in
-[MAINTENANCE.md](MAINTENANCE.md); to resolve an app version to a base commit
+A Geph *app* release is not a geph5 *crate* version. The current base is
+`patches/BASE` = `1f65e9e`, the geph5 commit behind Geph **5.9.1**, whose
+workspace version is `0.4.2` — so the module zip is named `v0.4.2` even though
+it ships Geph 5.9.1.
+
+`patches/APP_VERSION` names the app release the series was last synced to.
+Upstream stopped tagging `gephgui-pkg` after `v5.9.1`; releases are now built
+from geph5 `master` and published to `dl.geph.io` (5.9.3 shipped 2026-11-23
+with 0.5.5-era code). The authoritative pin history is the version ledger in
+[MAINTENANCE.md](MAINTENANCE.md); to resolve an app release to a base commit
 yourself, see [MAINTENANCE.md](MAINTENANCE.md) §5, Step 0.
 
 ## Notes and limitations

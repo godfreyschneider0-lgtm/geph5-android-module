@@ -25,22 +25,29 @@ unfixed.
 
 ## Version pinning
 
-A Geph *app* version is not a geph5 *crate* version. `gephgui-pkg` tag `v5.9.1`
-(2026-09-27) pins the core by **git submodule** at `1f65e9e`, whose workspace
-version is `0.4.2`. `patches/BASE` holds that commit; the series is written
-against it. The pin history is the version ledger in
-[MAINTENANCE.md](../MAINTENANCE.md).
+A Geph *app* version is not a geph5 *crate* version.
 
-When picking a base, resolve app version → submodule commit, not version strings:
+- `patches/BASE` is the geph5 commit the series is written against — today
+  `1f65e9e`, the core behind app **5.9.1**, workspace version `0.4.2`.
+- `patches/APP_VERSION` is the app release that commit corresponds to.
+
+Upstream's old rule ("the base is the submodule pin of the newest
+`gephgui-pkg` tag") no longer resolves anything: public tags stop at `v5.9.1`
+(2026-09-27) while 5.9.3 shipped 2026-11-23 built from geph5 `master`. Releases
+are cut on upstream's own machines and published to
+`https://dl.geph.io/geph-releases/metadata.yaml`.
+
+So resolve a release like this instead:
 
 ```bash
-git ls-tree <app-tag> geph5      # in gephgui-pkg, gives the submodule sha
-git -C /path/to/geph5 show -s --format=%s <sha>
+curl -fsSL https://dl.geph.io/geph-releases/metadata.yaml   # -> android-stable.version
+git ls-remote https://github.com/geph-official/geph5.git HEAD  # -> base commit
 git -C /path/to/geph5 show <sha>:Cargo.toml | grep -m1 '^version'
 ```
 
-The app tag sequence skips versions (`v5.9.0` does not exist), so do not infer a
-base from version arithmetic.
+Confirm the match with the binary fingerprint check in
+[MAINTENANCE.md](../MAINTENANCE.md) §5, Step 0 — do not infer a base from
+version arithmetic.
 
 ## Updating to a new upstream release
 

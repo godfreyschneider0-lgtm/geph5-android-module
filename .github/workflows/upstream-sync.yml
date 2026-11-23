@@ -2,12 +2,22 @@ name: upstream-sync
 
 # Automated half of MAINTENANCE.md §5 (upstream sync):
 #
-#   step 0  resolve the newest stable gephgui-pkg tag -> geph5 submodule sha
+#   step 0  resolve the newest Android app release -> geph5 base commit
 #   step 2  triage: apply-patches.sh --check against the new base
 #   step 3  absorb the new base into the fork tip (git merge)
 #   step 4  re-export the patch series (patches/regenerate.sh)
 #   step 5  verify with BOTH builds: nix build .#geph5 (Linux) and
 #           android/build-module.sh (Android, NDK cross-compile)
+#
+# Step 0 no longer reads gephgui-pkg tags: upstream stopped pushing them
+# (newest public tag is still v5.9.1 while 5.9.3 shipped on 2026-11-23) and
+# releases are now cut from local build machines and published to
+# dl.geph.io. The release signal is therefore dl.geph.io's metadata.yaml,
+# and the base is geph5 master HEAD, because the released binaries are built
+# from master (verified 2026-11-23: 5.9.3's libgeph.so carries
+# binaries/geph5-client/src/early_death.rs, a file that only exists after
+# 0.4.2, with line numbers matching master HEAD). See MAINTENANCE.md §5
+# step 0 for the fingerprint check that re-establishes this.
 #
 # When everything is green it opens a pull request that carries the merge
 # commit, the regenerated patches and the refreshed upstreamHash; review,
@@ -17,16 +27,18 @@ name: upstream-sync
 # a merge conflict fails this workflow (GitHub emails the failure to watchers)
 # and opens a tracking issue quoting the exact patch output.
 #
-# Short-circuits to ~1 minute when patches/BASE already equals the newest
-# stable tag's pin.
+# Short-circuits to ~1 minute when patches/APP_VERSION already names the
+# newest release and patches/BASE already equals the resolved geph5 commit.
 
 on:
   schedule:
-    - cron: "23 3 * * *" # daily, 03:23 UTC
+    - cron: "23 3 * * *" # daily, 03:23 UTC (upstream announces releases at arbitrary times)
+  push:
+    branches: [main] # cheap: short-circuits in ~1 min when already up to date
   workflow_dispatch:
     inputs:
       base:
-        description: "geph5 commit to sync to (defaults to the newest stable app tag's pin)"
+        description: "geph5 commit to sync to (defaults to geph5 master HEAD at release time)"
         required: false
         default: ""
 
@@ -41,7 +53,7 @@ concurrency:
 
 env:
   GEPH5_URL: https://github.com/geph-official/geph5.git
-  APP_PKG: geph-official/gephgui-pkg
+  META_URL: https://dl.geph.io/geph-releases/metadata.yaml
   NDK_VERSION: r27c
 
 jobs:
@@ -61,34 +73,54 @@ jobs:
           git config user.name "geph5-sync-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # ---- §5 step 0: app tag -> geph5 submodule pin ----------------------
+      # ---- §5 step 0: newest app release -> geph5 base commit -------------
       - name: Resolve the target base
         id: resolve
         env:
           MANUAL_BASE: ${{ inputs.base }}
         run: |
           set -euo pipefail
+          app=$(curl -fsSL "$META_URL" \
+            | awk '/^android-stable:/{f=1} f && /^  version:/ && !v {v=$2} END {print v}')
+          if [ -z "${app:-}" ]; then
+            echo "::error::could not read android-stable.version from $META_URL"
+            exit 1
+          fi
+          echo "newest Android app release: $app"
+
           base="$MANUAL_BASE"
           if [ -n "$base" ]; then
-            tag="(manual base)"
+            tag="$app (manual base)"
+            bump_app=""
           else
-            tag=$(git ls-remote --tags "https://github.com/${APP_PKG}.git" 'refs/tags/v*' \
-              | grep -v '\^{}' | awk -F/ '{print $NF}' | sort -V | tail -1)
-            echo "newest stable app tag: $tag"
-            base=$(curl -fsSL "https://api.github.com/repos/${APP_PKG}/contents/geph5?ref=${tag}" | jq -r .sha)
-            echo "app tag $tag pins geph5 at ${base}"
+            tag="v$app"
+            # Released binaries are built from master (see the header note).
+            base=$(git ls-remote "$GEPH5_URL" HEAD | awk 'NR==1 {print $1}')
+            bump_app="$app"
+            echo "geph5 master HEAD: $base"
           fi
+
           cur=$(cat patches/BASE)
-          echo "current patches/BASE: $cur"
+          cur_app=$(cat patches/APP_VERSION 2>/dev/null || true)
+          echo "current patches/BASE: $cur (app ${cur_app:-unknown})"
+
+          uptodate=false
+          if [ "$base" = "$cur" ]; then
+            if [ -z "$bump_app" ] || [ "$bump_app" = "$cur_app" ]; then
+              uptodate=true
+            fi
+          fi
           {
             echo "base=$base"
             echo "tag=$tag"
-            echo "uptodate=$([ "$base" = "$cur" ] && echo true || echo false)"
+            echo "app=$app"
+            echo "bump_app=$bump_app"
+            echo "uptodate=$uptodate"
           } >> "$GITHUB_OUTPUT"
 
       - name: Nothing to do
         if: steps.resolve.outputs.uptodate == 'true'
-        run: echo "patches/BASE is already at ${{ steps.resolve.outputs.base }} (${{ steps.resolve.outputs.tag }})."
+        run: echo "patches/BASE is already at ${{ steps.resolve.outputs.base }} (app ${{ steps.resolve.outputs.app }})."
 
       # ---- §5 step 1+2: pristine upstream at the new base, triage ---------
       - name: Triage the patch series against the new base
@@ -186,8 +218,8 @@ jobs:
 
           | | |
           |---|---|
-          | app tag | $TAG |
-          | geph5 base | \`$NEW_BASE\` |
+          | app release | $TAG |
+          | geph5 base | \`$NEW_BASE\` (master HEAD at release time) |
           | crate version | $crate |
 
           EOF
@@ -196,10 +228,15 @@ jobs:
         if: steps.resolve.outputs.uptodate == 'false'
         env:
           NEW_BASE: ${{ steps.resolve.outputs.base }}
+          BUMP_APP: ${{ steps.resolve.outputs.bump_app }}
         run: |
           set -euo pipefail
           ./patches/regenerate.sh "$NEW_BASE"
           git add patches/BASE patches/*.patch
+          if [ -n "$BUMP_APP" ]; then
+            echo "$BUMP_APP" > patches/APP_VERSION
+            git add patches/APP_VERSION
+          fi
           {
             echo "### Patch series re-export"
             echo

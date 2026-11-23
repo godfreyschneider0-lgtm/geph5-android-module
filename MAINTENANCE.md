@@ -15,7 +15,7 @@ patch hunk, that step is wrong — re-derive instead (§6).
                     this repo (ours)                     geph-official/geph5
  ┌────────────────────────────────────────────┐    ┌──────────────────────────┐
  │ android/         module scripts, templates │    │ pristine history         │
- │ patches/         9 patches + BASE + prose  │    │ (never edited by us)     │
+ │ patches/       9 patches+BASE+APP_VERSION  │    │ (never edited by us)     │
  │ apply-patches.sh applies series ───────────┼───▶│ upstream/ pristine clone │
  │ patches/regenerate.sh  re-exports series   │    │ pinned at patches/BASE   │
  └────────────────────────────────────────────┘    └──────────────────────────┘
@@ -66,7 +66,8 @@ Each `patches/NNNN-*.patch` file is two concatenated parts:
 2. **Diff** (everything below `---`) — machine-derived `git diff` output for
    exactly one file. Never edit this by hand; it is regenerated (§6).
 
-`patches/BASE` holds the upstream commit the series is written against.
+`patches/BASE` holds the upstream commit the series is written against;
+`patches/APP_VERSION` holds the app release that commit corresponds to.
 
 Invariants — breaking these is how the model rots:
 
@@ -147,27 +148,56 @@ update by hand is the app-tag mapping: the version ledger at the end of §5.
 
 ### Step 0 — resolve the release to a base commit
 
-**Policy — track stable app releases, never upstream `master`.** The base is
-always the geph5 commit pinned by the newest stable `gephgui-pkg` tag, so this
-module ships the same core the official app ships. Master can look tempting —
-0.4.3 (`55dcced`) even applies 6/6 cleanly — but no app release has shipped it;
-resist unless a specific fix is required, and then say so in the ledger below.
+**Policy — track released app builds; since 5.9.3 that means geph5 `master`.**
+Until 5.9.1 the base was the geph5 commit pinned by the newest `gephgui-pkg`
+tag. That mechanism is dead: upstream stopped pushing tags (public tag list
+still ends at `v5.9.1`, 2026-09-27) and now cuts releases on its own build
+machines and uploads them to `dl.geph.io` (`build-common.bash` in
+`gephgui-pkg` describes exactly that local-build flow). The 5.9.3 APK went up
+2026-11-23 while `gephgui-pkg`/`geph-android` on GitHub still pin geph5
+`1f65e9e` (0.4.2).
 
-A Geph *app* version is not a geph5 *crate* version, and app tags skip numbers
-(`v5.9.0` does not exist). Resolve the newest tag to a base commit via the
-submodule pin, not arithmetic:
+The release signal is therefore the published metadata:
 
 ```bash
-# newest stable tag (no clone needed)
-git ls-remote --tags https://github.com/geph-official/gephgui-pkg.git | tail -5
+curl -fsSL https://dl.geph.io/geph-releases/metadata.yaml
+# android-stable:
+#   version: 5.9.3
+#   sha256: ef5741fb…
+```
 
-# in a gephgui-pkg checkout of that tag: app tag -> geph5 submodule sha
-# (this is how the current base was resolved: v5.9.1 -> 1f65e9e -> 0.4.2)
-git ls-tree v5.9.1 geph5
+and the base is **geph5 `master` HEAD at release time**, because that is what
+the released binaries are built from. Verify that claim with a fingerprint
+instead of trusting this paragraph — the shipped binary's tracing paths are
+compiled-in source line numbers:
 
-# in any geph5 checkout: what is that sha?
-git show -s --format='%h %s' <sha>
-git show <sha>:Cargo.toml | grep -m1 '^version'
+```bash
+curl -fsSLO https://dl.geph.io/geph-releases/android-stable/5.9.3/geph-android.apk
+unzip -o -q geph-android.apk lib/arm64-v8a/libgeph.so -d /tmp/apk
+strings -a /tmp/apk/lib/arm64-v8a/libgeph.so \
+  | grep -oE 'binaries/geph5-client/src/[a-z_/]+\.rs:[0-9]+' | sort -u
+
+# then check one of those (file, line) pairs against master HEAD:
+git -C upstream show cf2d90f:binaries/geph5-client/src/early_death.rs | sed -n '23p'
+```
+
+On 2026-11-23 that printed `binaries/geph5-client/src/early_death.rs:23`, and
+`early_death.rs` does not exist at all in 0.4.2 — so 5.9.3 ships 0.5.5-era
+master code, not the 0.4.2 the public submodule pins claim.
+
+Consequences for this repo:
+
+- `patches/APP_VERSION` records which app release the series was synced to
+  (the workflow's short-circuit key); `patches/BASE` stays the commit.
+- `android/build-module.sh` still names the zip after the *crate* version, so
+  a 5.9.3 sync produces `v0.5.5` artifacts, not `v5.9.3` — expected.
+- If a specific fix needs a non-HEAD commit, say so in the ledger below.
+
+A Geph *app* version is not a geph5 *crate* version, and app tags skip numbers
+(`v5.9.0` does not exist). To read the crate version of a resolved base:
+
+```bash
+git -C upstream show <sha>:Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1
 ```
 
 ### Step 1 — fetch, and point the build tree at the new base
@@ -227,7 +257,8 @@ next `regenerate.sh` silently exports reversals (§3, consequence 2).
 git diff -- patches/
 ```
 
-- Fast path: nine lines of `unchanged`, only `patches/BASE` moves. Review, done.
+- Fast path: nine lines of `unchanged`, only `patches/BASE` (and
+  `patches/APP_VERSION`) move. Review, done.
 - Conflict path: the patches whose files drifted get new hunks; headers are
   preserved verbatim. Read the diff — it is the reviewable form of the merge
   you just did.
@@ -255,7 +286,8 @@ from the upstream/ checkout automatically (§4). Two human records do:
 
 1. Append a row to the version ledger below.
 2. Refresh the current-pin sentences in `README.md` ("Which version is
-   this?") and `patches/README.md` ("Version pinning") to the new tag/sha/version.
+   this?") and `patches/README.md` ("Version pinning") to the new
+   app release / sha / crate version.
 
 The mechanical part of the row:
 
@@ -269,11 +301,20 @@ echo "base=$base crate=$ver"    # add the app tag from Step 0 by hand
 ### Version ledger
 
 Every completed sync appends one row. Newest last. If a base was ever taken
-from something other than a stable app tag, say so and why in a note.
+from something other than a released app build, say so and why in a note.
 
-| Date | App tag | Base (`patches/BASE`) | Crate version | Module zip |
+| Date | App release | Base (`patches/BASE`) | Crate version | Module zip |
 |---|---|---|---|---|
-| 2026-10-06 | v5.9.1 | `1f65e9e` | 0.4.2 | `geph5-ksu-v0.4.2` |
+| 2026-10-06 | 5.9.1 (`gephgui-pkg` tag `v5.9.1`) | `1f65e9e` | 0.4.2 | `geph5-ksu-v0.4.2` |
+
+**Open item — 5.9.3 (released 2026-11-23).** Published binaries ship 0.5.5-era
+master code (`cf2d90f`, fingerprint in §5 step 0), while `patches/BASE` is
+still `1f65e9e` (0.4.2). `patches/APP_VERSION` names the app release the series
+was last synced to — `5.9.1` until that sync completes. Expect the 0.5.x merge
+to be the hard path: `client.rs` and `platform.rs` both moved a lot, the
+workspace moved to `edition = "2024"` and SQLx 0.9, and the Android app now
+talks to brokers that changed auth/SNI handling — a 0.4.2 module is not
+guaranteed to work against the 5.9.3-era network.
 
 ## 6. Changing the series itself
 
