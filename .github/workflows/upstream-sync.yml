@@ -41,6 +41,11 @@ on:
         description: "geph5 commit to sync to (defaults to geph5 master HEAD at release time)"
         required: false
         default: ""
+      force:
+        description: "run the full pipeline even if patches/APP_VERSION and patches/BASE are current (re-verify)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -78,6 +83,7 @@ jobs:
         id: resolve
         env:
           MANUAL_BASE: ${{ inputs.base }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           app=$(curl -fsSL "$META_URL" \
@@ -105,7 +111,9 @@ jobs:
           echo "current patches/BASE: $cur (app ${cur_app:-unknown})"
 
           uptodate=false
-          if [ "$base" = "$cur" ]; then
+          if [ "${FORCE:-false}" = "true" ]; then
+            echo "forced run: skipping the up-to-date short-circuit"
+          elif [ "$base" = "$cur" ]; then
             if [ -z "$bump_app" ] || [ "$bump_app" = "$cur_app" ]; then
               uptodate=true
             fi
