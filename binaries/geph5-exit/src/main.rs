@@ -1,8 +1,9 @@
 mod bw_accounting;
 mod dns;
 mod ipv6;
+#[cfg(target_env = "musl")]
+mod jemalloc_profile;
 mod session;
-mod tasklimit;
 
 use clap::Parser;
 use ed25519_dalek::SigningKey;
@@ -17,10 +18,7 @@ use serde_with::{DisplayFromStr, serde_as};
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
-    process,
     str::FromStr,
-    thread,
-    time::Duration,
 };
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -40,43 +38,6 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use crate::ratelimit::update_load_loop;
 use geph5_broker_protocol::{AccountLevel, ExitCategory, ExitMetadata};
-use session::RATE_LIMITER_CACHE;
-
-fn read_status_kb(field: &str) -> Option<u64> {
-    let contents = std::fs::read_to_string("/proc/self/status").ok()?;
-    for line in contents.lines() {
-        if let Some(rest) = line.strip_prefix(field) {
-            return rest
-                .split_whitespace()
-                .next()
-                .and_then(|val| val.parse::<u64>().ok());
-        }
-    }
-    None
-}
-
-fn instrumentation_report_loop() {
-    tracing::info!(
-        pid = process::id(),
-        picomux_stream_size = std::mem::size_of::<picomux::Stream>(),
-        sosistab_over_stream_size =
-            std::mem::size_of::<sillad_sosistab3::SosistabPipe<picomux::Stream>>(),
-        "instrumentation type sizes"
-    );
-    loop {
-        thread::sleep(Duration::from_secs(60));
-        let sosistab_stats = sillad_sosistab3::listener::global_listener_stats();
-        tracing::info!(
-            vmrss_kb = read_status_kb("VmRSS:"),
-            vmswap_kb = read_status_kb("VmSwap:"),
-            rate_limiter_entries = RATE_LIMITER_CACHE.entry_count(),
-            sosistab_listeners = sosistab_stats.live_listeners,
-            sosistab_queue_slots = sosistab_stats.queue_slots,
-            sosistab_queue_payload_bytes = sosistab_stats.queue_payload_bytes,
-            "instrumentation snapshot"
-        );
-    }
-}
 
 /// The global config file.
 static CONFIG_FILE: OnceCell<ConfigFile> = OnceCell::new();
@@ -94,6 +55,11 @@ struct ConfigFile {
 
     country: CountryCode,
     city: String,
+
+    /// Use plain DNS instead of DNS-over-HTTPS for proxied DNS queries.
+    #[serde(default)]
+    dns_over_udp: bool,
+    udp_dns_server: Option<SocketAddr>,
 
     #[serde(default)]
     metadata: Option<ExitMetadata>,
@@ -113,8 +79,8 @@ struct ConfigFile {
     #[serde(default = "default_free_port_whitelist")]
     free_port_whitelist: Vec<u16>,
 
-    #[serde(default = "default_task_limit")]
-    task_limit: usize,
+    #[serde(default = "default_free_tcp_port_whitelist")]
+    free_tcp_port_whitelist: Vec<u16>,
 
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
@@ -126,6 +92,22 @@ struct ConfigFile {
     /// YouTube video ID probed by the Google-reachability selfcheck.
     #[serde(default = "default_google_selfcheck_video")]
     google_selfcheck_video: String,
+}
+
+impl ConfigFile {
+    fn dns_udp_server(&self) -> anyhow::Result<Option<SocketAddr>> {
+        if !self.dns_over_udp {
+            return Ok(None);
+        }
+        let server = self.udp_dns_server.ok_or_else(|| {
+            anyhow::anyhow!("udp_dns_server must be set when dns_over_udp is enabled")
+        })?;
+        anyhow::ensure!(
+            server.port() != 0,
+            "udp_dns_server must have a nonzero port"
+        );
+        Ok(Some(server))
+    }
 }
 
 fn default_google_selfcheck_video() -> String {
@@ -169,17 +151,13 @@ fn default_total_ratelimit() -> u32 {
     125000
 }
 
-fn default_task_limit() -> usize {
-    1_000_000
-}
-
 fn default_free_port_whitelist() -> Vec<u16> {
     vec![
         20, 21, 43, 53, 79, 80, 81, 88, 110, 143, 220, 389, 443, 464, 531, 543, 544, 554, 636, 706,
         749, 873, 902, 903, 904, 981, 989, 990, 991, 992, 993, 995, 1194, 1220, 1293, 1500, 1533,
         1677, 1723, 1755, 1863, 2083, 2086, 2087, 2095, 2096, 2102, 2103, 2104, 3690, 4321, 4643,
-        5050, 5190, 5222, 5223, 5228, 8008, 8074, 8082, 8087, 8088, 8332, 8333, 8443, 8888, 9418,
-        10000, 11371, 19294, 19638, 50002, 64738,
+        5050, 5190, 5222, 5223, 5228, 8008, 8074, 8080, 8082, 8087, 8088, 8332, 8333, 8443, 8888,
+        9418, 10000, 11371, 19294, 19638, 50002, 64738,
         // --- VoIP / WebRTC calling (WhatsApp, Signal, FaceTime, Teams, Zoom, Meet) ---
         // STUN/TURN signaling + relay. This is the single most important group: when
         // direct peer-to-peer media is blocked, virtually every app falls back to
@@ -198,6 +176,10 @@ fn default_free_port_whitelist() -> Vec<u16> {
         16384, 16385, 16386, 16387, // Apple FaceTime RTP
         16393, 16394, 16395, 16396, 16397, 16398, 16399, 16400, 16401, 16402, // FaceTime RTP
     ]
+}
+
+fn default_free_tcp_port_whitelist() -> Vec<u16> {
+    vec![1935, 2052, 2053, 2082, 5229, 5230, 8880]
 }
 
 fn default_country_blacklist() -> Vec<String> {
@@ -260,7 +242,7 @@ static SIGNING_SECRET: Lazy<SigningKey> = Lazy::new(|| {
         }
         _ => {
             // Generate a new SigningKey if there's an error or the length is not 32 bytes.
-            let new_key = SigningKey::from_bytes(&rand::thread_rng().r#gen());
+            let new_key = SigningKey::from_bytes(&rand::rng().random());
             let key_bytes = new_key.to_bytes();
             std::fs::write(&config_file.signing_secret, key_bytes).unwrap();
             new_key
@@ -306,16 +288,44 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("**** START GEPH EXIT ****");
     let args = CliArgs::parse();
     let config: ConfigFile = serde_yaml::from_slice(&std::fs::read(args.config)?)?;
+    config.dns_udp_server()?;
 
     CONFIG_FILE.set(config).ok().unwrap();
 
-    std::thread::spawn(instrumentation_report_loop);
+    #[cfg(target_env = "musl")]
+    jemalloc_profile::start()?;
     geph5_rt::block_on(listen_main())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{AdvertisedIpSource, ConfigFile};
+
+    #[test]
+    fn udp_dns_is_opt_in_and_requires_a_server() {
+        let base = "signing_secret: /tmp/test\nc2e_listen: 0.0.0.0:9002\nb2e_listen: 0.0.0.0:9003\ncountry: JP\ncity: Tokyo\n";
+        let parse =
+            |extra: &str| serde_yaml::from_str::<ConfigFile>(&format!("{base}{extra}")).unwrap();
+        assert_eq!(parse("").dns_udp_server().unwrap(), None);
+        assert_eq!(
+            parse("udp_dns_server: 1.1.1.1:53\n")
+                .dns_udp_server()
+                .unwrap(),
+            None
+        );
+        assert!(parse("dns_over_udp: true\n").dns_udp_server().is_err());
+        assert!(
+            parse("dns_over_udp: true\nudp_dns_server: 1.1.1.1:0\n")
+                .dns_udp_server()
+                .is_err()
+        );
+        assert_eq!(
+            parse("dns_over_udp: true\nudp_dns_server: 1.1.1.1:53\n")
+                .dns_udp_server()
+                .unwrap(),
+            Some("1.1.1.1:53".parse().unwrap())
+        );
+    }
 
     fn parse_ip_addr(value: &str) -> Option<AdvertisedIpSource> {
         let yaml = format!(

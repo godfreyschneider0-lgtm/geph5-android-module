@@ -24,6 +24,7 @@ mod control_prot;
 mod database;
 mod device_metadata;
 mod dial_logging;
+mod early_death;
 mod http_proxy;
 mod litecopy;
 pub mod logging;
@@ -182,6 +183,7 @@ mod tests {
             control_listen_pipe: None,
             exit_constraint: super::ExitConstraint::Auto,
             allow_direct: false,
+            diagnostic_route: None,
             port_forward: vec![],
             cache: None,
             broker: Some(BrokerSource::Race(vec![

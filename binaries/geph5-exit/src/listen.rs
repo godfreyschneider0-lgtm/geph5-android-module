@@ -16,7 +16,6 @@ use picomux::{LivenessConfig, PicoMux};
 use sillad::{EitherPipe, Pipe, listener::Listener, tcp::TcpListener};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use stdcode::StdcodeSerializeExt;
-use tachyonix::Sender;
 
 use x25519_dalek::{EphemeralSecret, PublicKey};
 mod b2e_process;
@@ -31,7 +30,6 @@ use crate::{
     proxy::proxy_stream,
     ratelimit::{RateLimiter, get_ratelimiter},
     session::SessionKey,
-    tasklimit::new_task_until_death,
 };
 
 pub async fn listen_main() -> anyhow::Result<()> {
@@ -82,20 +80,9 @@ async fn c2e_loop() -> anyhow::Result<()> {
 
 async fn b2e_loop() -> anyhow::Result<()> {
     let mut listener = TcpListener::bind(CONFIG_FILE.wait().b2e_listen).await?;
-    let b2e_table: Cache<ObfsProtocol, Sender<picomux::Stream>> = Cache::builder()
+    let b2e_table: Cache<ObfsProtocol, Arc<b2e_process::B2eListener>> = Cache::builder()
         .time_to_idle(Duration::from_secs(1200))
         .build();
-    let b2e_table_report = b2e_table.clone();
-    geph5_rt::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
-            tracing::info!(
-                b2e_table_entries = b2e_table_report.entry_count(),
-                "b2e table snapshot"
-            );
-        }
-    })
-    .detach();
     loop {
         let b2e_raw = match listener.accept().await {
             Ok(conn) => conn,
@@ -132,11 +119,10 @@ async fn b2e_loop() -> anyhow::Result<()> {
                             table_length = display(b2e_table.entry_count()),
                             "creating new b2e metadata"
                         );
-                        let (send, recv) = tachyonix::channel(1);
-                        geph5_rt::spawn(b2e_process::b2e_process(protocol, recv)).detach();
-                        send
+                        Arc::new(b2e_process::B2eListener::new(protocol))
                     })
-                    .await;
+                    .await
+                    .sender();
                 send.send(lala).await.ok().context("could not accept")?;
             }
             #[allow(unreachable_code)]
@@ -159,7 +145,7 @@ async fn handle_client(mut client: impl Pipe) -> anyhow::Result<()> {
             ExitHelloInner::SharedSecretResponse(mac)
         }
         ClientCryptHello::X25519(their_epk) => {
-            let my_esk = EphemeralSecret::random_from_rng(rand::thread_rng());
+            let my_esk = EphemeralSecret::random_from_rng(rand_core::OsRng);
             let my_epk = PublicKey::from(&my_esk);
             let shared_secret = my_esk.diffie_hellman(&their_epk);
             let read_key = blake3::derive_key("c2e", shared_secret.as_bytes());
@@ -202,7 +188,11 @@ async fn handle_client(mut client: impl Pipe) -> anyhow::Result<()> {
     };
 
     let (client_read, client_write) = tokio::io::split(client);
-    let mux = PicoMux::new(client_read, client_write);
+    let mut mux = PicoMux::new(client_read, client_write);
+    mux.set_liveness(LivenessConfig {
+        ping_interval: Duration::from_secs(1800),
+        timeout: Duration::from_secs(300),
+    });
     mux.set_debloat(true);
 
     let mut sess_metadata = None;
@@ -247,18 +237,14 @@ async fn handle_client(mut client: impl Pipe) -> anyhow::Result<()> {
             .unwrap_or_else(|| Arc::new(serde_json::Value::Null));
         let dialer = dialer.clone();
         geph5_rt::spawn(
-            (
-                proxy_stream(
-                    dialer,
-                    sess_metadata.clone(),
-                    ratelimit.clone(),
-                    stream,
-                    is_free,
-                ),
-                new_task_until_death(Duration::from_secs(1)),
+            proxy_stream(
+                dialer,
+                sess_metadata.clone(),
+                ratelimit.clone(),
+                stream,
+                is_free,
             )
-                .race()
-                .map_err(|e| tracing::trace!(err = debug(e), "stream died with")),
+            .map_err(|e| tracing::trace!(err = debug(e), "stream died with")),
         )
         .detach();
     }

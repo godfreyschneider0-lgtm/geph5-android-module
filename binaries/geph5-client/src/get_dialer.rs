@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyctx::AnyCtx;
 use anyhow::Context;
@@ -8,7 +8,7 @@ use geph5_broker_protocol::{
     JsonSigned, RouteDescriptor,
 };
 use isocountry::CountryCode;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use sillad::dialer::{DialerExt, DynDialer, FailingDialer};
 
 use crate::bound_dialer::BoundTcpDialer;
@@ -20,10 +20,19 @@ use sillad_sosistab3::{Cookie, dialer::SosistabDialer};
 use crate::{
     auth::get_connect_token,
     broker::broker_client,
-    client::Config,
+    client::{Config, CtxField},
     device_metadata::get_device_metadata,
     dial_logging::logged,
+    early_death::EARLY_DEATHS,
     route_cache::{read_cached_exit_route, write_cached_exit_route},
+};
+
+// A client context has a fixed exit constraint. Only a verified broker response
+// starts the freshness window. Routes recovered from disk are fallback only.
+static RECENT_EXIT_ROUTE: CtxField<moka::future::Cache<(), ExitRouteDescriptor>> = |_| {
+    moka::future::Cache::builder()
+        .time_to_live(Duration::from_secs(60))
+        .build()
 };
 
 fn route_subtree_json(route: &RouteDescriptor) -> String {
@@ -34,6 +43,15 @@ fn route_subtree_json(route: &RouteDescriptor) -> String {
 pub async fn get_dialer(
     ctx: &AnyCtx<Config>,
 ) -> anyhow::Result<(VerifyingKey, ExitDescriptor, DynDialer)> {
+    if let Some(forced) = &ctx.init().diagnostic_route {
+        // Never consult the route cache, request another route, or add a direct
+        // path when a caller explicitly pins a diagnostic route.
+        return Ok((
+            forced.exit_pubkey,
+            forced.exit.clone(),
+            route_to_dialer(ctx, &forced.route),
+        ));
+    }
     if let ExitConstraint::Direct(dir) = &ctx.init().exit_constraint {
         let (dir, pubkey_hex) = dir
             .split_once('/')
@@ -48,7 +66,7 @@ pub async fn get_dialer(
         let dest_addr = *tokio::net::lookup_host(dir)
             .await?
             .collect::<Vec<_>>()
-            .choose(&mut rand::thread_rng())
+            .choose(&mut rand::rng())
             .context("could not resolve destination for direct exit connection")?;
         let direct_route = RouteDescriptor::ConnTest {
             ping_count: 1,
@@ -67,97 +85,16 @@ pub async fn get_dialer(
             logged(
                 "overall",
                 route_subtree_json(&direct_route),
-                logged(
-                    "conntest",
-                    route_subtree_json(&direct_route),
-                    ConnTestDialer {
-                        ping_count: 1,
-                        inner: logged(
-                            "tcp",
-                            route_subtree_json(&RouteDescriptor::Tcp(dest_addr)),
-                            BoundTcpDialer { dest_addr },
-                        )
-                        .dynamic(),
-                    },
-                ),
+                route_to_dialer(ctx, &direct_route),
             )
             .dynamic(),
         ));
     }
 
-    if let Some(cached) = read_cached_exit_route(ctx, &ctx.init().exit_constraint).await?
-        && exit_route_is_unexpired(&cached)
-    {
-        tracing::debug!(
-            expiry = cached.exit.expiry,
-            "returning unexpired cached exit route"
-        );
-        return dialer_from_exit_route(ctx, cached);
-    }
-
-    let res: anyhow::Result<ExitRouteDescriptor> = async {
-        let (_level, conn_token, sig) = get_connect_token(ctx)
-            .await
-            .context("could not get connect token")?;
-
-        let start = Instant::now();
-        // `get_device_metadata` fetches the device's public IP (for the broker's
-        // ASN/country bridge tuning). In full-tunnel VPN mode it now resolves
-        // checkip over the physical NIC's own DNS servers (see
-        // `device_metadata`/`china::resolve_a_physical`), so it succeeds fast even
-        // mid-reconnect and is cached per day — no more ~10s `getaddrinfo` hang.
-        // The timeout is only a backstop; on any miss we still send at least the
-        // `version` (which independently gates a bridge route), never bare null, so
-        // a momentary IP miss doesn't also drop the version.
-        const METADATA_BUDGET: Duration = Duration::from_secs(2);
-        let version_only = || serde_json::json!({ "version": env!("CARGO_PKG_VERSION") });
-        let metadata = match tokio::time::timeout(METADATA_BUDGET, get_device_metadata(ctx)).await {
-            Ok(Ok(metadata)) => {
-                tracing::debug!(
-                    metadata = debug(&metadata),
-                    elapsed = debug(start.elapsed()),
-                    "DEVICE METADATA OBTAINED"
-                );
-                serde_json::to_value(&metadata)?
-            }
-            Ok(Err(err)) => {
-                tracing::warn!(
-                    err = debug(err),
-                    "could not get device metadata, proceeding with version only"
-                );
-                version_only()
-            }
-            Err(_elapsed) => {
-                tracing::warn!(
-                    budget = debug(METADATA_BUDGET),
-                    "device metadata timed out, proceeding with version only"
-                );
-                version_only()
-            }
-        };
-
-        tracing::debug!(token = %conn_token, "CONN TOKEN");
-        let broker = broker_client(ctx)?;
-        let signed_exit_route = broker
-            .get_exit_route(GetExitRouteArgs {
-                token: conn_token,
-                sig,
-                exit_constraint: ctx.init().exit_constraint.clone(),
-                client_metadata: metadata,
-            })
-            .await?
-            .map_err(|e| anyhow::anyhow!("broker refused to serve exit routes: {e}"))?;
-        let exit_route = verify_exit_route(ctx, signed_exit_route)?;
-
-        if let Err(err) =
-            write_cached_exit_route(ctx, &ctx.init().exit_constraint, &exit_route).await
-        {
-            tracing::warn!(err = debug(&err), "could not persist exit route cache");
-        }
-
-        Ok(exit_route)
-    }
-    .await;
+    let res = ctx
+        .get(RECENT_EXIT_ROUTE)
+        .try_get_with((), fetch_exit_route(ctx))
+        .await;
 
     let exit_route = match res {
         Ok(val) => val,
@@ -169,14 +106,14 @@ pub async fn get_dialer(
                     cached
                 }
                 Ok(None) => {
-                    return Err(
-                        err.context("fresh exit route unavailable and no cached route found")
+                    anyhow::bail!(
+                        "fresh exit route unavailable and no cached route found: {err:#}"
                     );
                 }
                 Err(cache_err) => {
-                    return Err(err.context(format!(
-                        "fresh exit route unavailable and cached route lookup failed: {cache_err}"
-                    )));
+                    anyhow::bail!(
+                        "fresh exit route unavailable ({err:#}) and cached route lookup failed: {cache_err:#}"
+                    );
                 }
             }
         }
@@ -185,12 +122,65 @@ pub async fn get_dialer(
     dialer_from_exit_route(ctx, exit_route)
 }
 
-fn exit_route_is_unexpired(route: &ExitRouteDescriptor) -> bool {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    route.exit.expiry > now
+async fn fetch_exit_route(ctx: &AnyCtx<Config>) -> anyhow::Result<ExitRouteDescriptor> {
+    let (_level, conn_token, sig) = get_connect_token(ctx)
+        .await
+        .context("could not get connect token")?;
+
+    let start = Instant::now();
+    // `get_device_metadata` fetches the device's public IP (for the broker's
+    // ASN/country bridge tuning). In full-tunnel VPN mode it now resolves
+    // checkip over the physical NIC's own DNS servers (see
+    // `device_metadata`/`china::resolve_a_physical`), so it succeeds fast even
+    // mid-reconnect and is cached per day — no more ~10s `getaddrinfo` hang.
+    // The timeout is only a backstop; on any miss we still send at least the
+    // `version` (which independently gates a bridge route), never bare null, so
+    // a momentary IP miss doesn't also drop the version.
+    const METADATA_BUDGET: Duration = Duration::from_secs(2);
+    let version_only = || serde_json::json!({ "version": env!("CARGO_PKG_VERSION") });
+    let metadata = match tokio::time::timeout(METADATA_BUDGET, get_device_metadata(ctx)).await {
+        Ok(Ok(metadata)) => {
+            tracing::debug!(
+                metadata = debug(&metadata),
+                elapsed = debug(start.elapsed()),
+                "DEVICE METADATA OBTAINED"
+            );
+            serde_json::to_value(&metadata)?
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(
+                err = debug(err),
+                "could not get device metadata, proceeding with version only"
+            );
+            version_only()
+        }
+        Err(_elapsed) => {
+            tracing::warn!(
+                budget = debug(METADATA_BUDGET),
+                "device metadata timed out, proceeding with version only"
+            );
+            version_only()
+        }
+    };
+
+    tracing::debug!(token = %conn_token, "CONN TOKEN");
+    let broker = broker_client(ctx)?;
+    let signed_exit_route = broker
+        .get_exit_route(GetExitRouteArgs {
+            token: conn_token,
+            sig,
+            exit_constraint: ctx.init().exit_constraint.clone(),
+            client_metadata: metadata,
+        })
+        .await?
+        .map_err(|e| anyhow::anyhow!("broker refused to serve exit routes: {e}"))?;
+    let exit_route = verify_exit_route(ctx, signed_exit_route)?;
+
+    if let Err(err) = write_cached_exit_route(ctx, &ctx.init().exit_constraint, &exit_route).await {
+        tracing::warn!(err = debug(&err), "could not persist exit route cache");
+    }
+
+    Ok(exit_route)
 }
 
 fn dialer_from_exit_route(
@@ -254,11 +244,27 @@ fn combine_exit_route(
 }
 
 fn route_to_dialer(ctx: &AnyCtx<Config>, route: &RouteDescriptor) -> DynDialer {
+    // Each race or fallback child is built as a separate branch. Place the delay
+    // outside the endpoint's own handshake and timeout.
+    let mut endpoint = None;
+    let dialer = build_dialer(ctx, route, &mut endpoint);
+    match endpoint.and_then(|addr| ctx.get(EARLY_DEATHS).delay(addr)) {
+        Some(delay) => dialer.delay(delay).dynamic(),
+        None => dialer,
+    }
+}
+
+fn build_dialer(
+    ctx: &AnyCtx<Config>,
+    route: &RouteDescriptor,
+    endpoint: &mut Option<std::net::SocketAddr>,
+) -> DynDialer {
     use sillad_native_tls::TlsDialer;
 
     match route {
         RouteDescriptor::Tcp(addr) => {
             let addr = *addr;
+            *endpoint = Some(addr);
             logged(
                 "tcp",
                 route_subtree_json(route),
@@ -267,7 +273,7 @@ fn route_to_dialer(ctx: &AnyCtx<Config>, route: &RouteDescriptor) -> DynDialer {
             .dynamic()
         }
         RouteDescriptor::Sosistab3 { cookie, lower } => {
-            let inner = route_to_dialer(ctx, lower);
+            let inner = build_dialer(ctx, lower, endpoint);
             logged(
                 "sosistab3",
                 route_subtree_json(route),
@@ -291,17 +297,17 @@ fn route_to_dialer(ctx: &AnyCtx<Config>, route: &RouteDescriptor) -> DynDialer {
         RouteDescriptor::Timeout {
             milliseconds,
             lower,
-        } => route_to_dialer(ctx, lower)
+        } => build_dialer(ctx, lower, endpoint)
             .timeout(Duration::from_millis(*milliseconds as _))
             .dynamic(),
         RouteDescriptor::Delay {
             milliseconds,
             lower,
-        } => route_to_dialer(ctx, lower)
+        } => build_dialer(ctx, lower, endpoint)
             .delay(Duration::from_millis((*milliseconds).into()))
             .dynamic(),
         RouteDescriptor::ConnTest { ping_count, lower } => {
-            let lower = route_to_dialer(ctx, lower);
+            let lower = build_dialer(ctx, lower, endpoint);
             logged(
                 "conntest",
                 route_subtree_json(route),
@@ -313,12 +319,12 @@ fn route_to_dialer(ctx: &AnyCtx<Config>, route: &RouteDescriptor) -> DynDialer {
             .dynamic()
         }
         RouteDescriptor::Hex { lower } => {
-            let lower = route_to_dialer(ctx, lower);
+            let lower = build_dialer(ctx, lower, endpoint);
             logged("hex", route_subtree_json(route), HexDialer { inner: lower }).dynamic()
         }
         RouteDescriptor::Other(_) => FailingDialer.dynamic(),
         RouteDescriptor::PlainTls { sni_domain, lower } => {
-            let lower = route_to_dialer(ctx, lower);
+            let lower = build_dialer(ctx, lower, endpoint);
             let mut builder = native_tls::TlsConnector::builder();
             builder
                 .use_sni(sni_domain.is_some())
@@ -343,7 +349,7 @@ fn route_to_dialer(ctx: &AnyCtx<Config>, route: &RouteDescriptor) -> DynDialer {
             .dynamic()
         }
         RouteDescriptor::Meeklike { key, cfg, lower } => {
-            let lower = route_to_dialer(ctx, lower);
+            let lower = build_dialer(ctx, lower, endpoint);
             logged(
                 "meeklike",
                 route_subtree_json(route),
@@ -375,6 +381,7 @@ mod tests {
             control_listen_pipe: None,
             exit_constraint: ExitConstraint::Auto,
             allow_direct: false,
+            diagnostic_route: None,
             cache: None,
             broker: None,
             tunneled_broker: None,
@@ -412,6 +419,90 @@ mod tests {
             exit: sample_exit_with_expiry(expiry),
             route: RouteDescriptor::Tcp("127.0.0.1:9002".parse().unwrap()),
         }
+    }
+
+    #[test]
+    fn ordinary_config_omits_diagnostic_route_for_older_engines() {
+        let value = serde_json::to_value(test_config()).unwrap();
+        assert!(value.get("diagnostic_route").is_none());
+        let decoded: Config = serde_json::from_value(value).unwrap();
+        assert!(decoded.diagnostic_route.is_none());
+    }
+
+    #[tokio::test]
+    async fn diagnostic_route_bypasses_broker_cache_and_direct_constraint() {
+        use sillad::dialer::Dialer;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut forced = sample_exit_route(0);
+        forced.route = RouteDescriptor::Tcp(listener.local_addr().unwrap());
+        let mut cfg = test_config();
+        cfg.allow_direct = true;
+        cfg.exit_constraint = ExitConstraint::Direct("intentionally invalid".into());
+        cfg.diagnostic_route = Some(forced.clone());
+        let (key, exit, dialer) = get_dialer(&AnyCtx::new(cfg)).await.unwrap();
+        assert_eq!(key, forced.exit_pubkey);
+        assert_eq!(exit, forced.exit);
+        assert!(dialer.dial().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn early_deaths_delay_only_the_affected_race_branch() {
+        use sillad::{Pipe, dialer::Dialer};
+
+        let ctx = AnyCtx::new(test_config());
+        let bad = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let good = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bad_addr = bad.local_addr().unwrap();
+        let good_addr = good.local_addr().unwrap();
+        for _ in 0..3 {
+            ctx.get(EARLY_DEATHS)
+                .record(bad_addr, Duration::from_secs(1));
+        }
+
+        // The TCP timeout starts after the penalty, so the branch still works alone.
+        let branch = RouteDescriptor::Timeout {
+            milliseconds: 500,
+            lower: Box::new(RouteDescriptor::Tcp(bad_addr)),
+        };
+        let race = RouteDescriptor::Race(vec![
+            branch.clone(),
+            RouteDescriptor::Delay {
+                milliseconds: 50,
+                lower: Box::new(RouteDescriptor::Tcp(good_addr)),
+            },
+        ]);
+        let winner = route_to_dialer(&ctx, &race).dial().await.unwrap();
+        assert_eq!(winner.remote_addr().unwrap().parse(), Ok(good_addr));
+        let started = Instant::now();
+        route_to_dialer(&ctx, &branch).dial().await.unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn failed_diagnostic_route_cannot_fall_back_to_direct_exit() {
+        use sillad::dialer::Dialer;
+        let direct = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_addr = closed.local_addr().unwrap();
+        drop(closed);
+        let mut forced = sample_exit_route(u64::MAX);
+        forced.exit.c2e_listen = direct.local_addr().unwrap();
+        forced.route = RouteDescriptor::Tcp(closed_addr);
+        let mut cfg = test_config();
+        cfg.allow_direct = true;
+        cfg.diagnostic_route = Some(forced);
+        let (_, _, dialer) = get_dialer(&AnyCtx::new(cfg)).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), dialer.dial())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), direct.accept())
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -461,15 +552,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn exit_route_expiry_is_compared_to_current_unix_time() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        assert!(exit_route_is_unexpired(&sample_exit_route(now + 1)));
-        assert!(!exit_route_is_unexpired(&sample_exit_route(now)));
-        assert!(!exit_route_is_unexpired(&sample_exit_route(now - 1)));
+    #[tokio::test]
+    async fn recently_fetched_route_is_reused_with_skewed_clocks() {
+        let ctx = AnyCtx::new(test_config());
+        for expiry in [0, u64::MAX] {
+            ctx.get(RECENT_EXIT_ROUTE)
+                .insert((), sample_exit_route(expiry))
+                .await;
+            let (_, exit, _) = get_dialer(&ctx).await.unwrap();
+            assert_eq!(exit.expiry, expiry);
+        }
     }
 }

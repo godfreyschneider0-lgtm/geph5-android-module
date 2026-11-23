@@ -1,7 +1,7 @@
 use anyhow::Context;
 use futures_util::{FutureExt as _, TryFutureExt};
 use geph5_broker_protocol::{BridgeDescriptor, ExitDescriptor, RouteDescriptor};
-use geph5_misc_rpc::bridge::{B2eMetadata, BridgeControlClient, ObfsProtocol};
+use geph5_misc_rpc::bridge::{B2eMetadata, BridgeControlClient, DEFAULT_TLS_SNI, ObfsProtocol};
 use moka::future::Cache;
 use nanorpc_sillad::DialerTransport;
 
@@ -20,7 +20,6 @@ use std::{
 enum ProtocolFlavor {
     Tls,
     Sosistab3,
-    Legacy,
     Meeklike,
 }
 
@@ -40,8 +39,11 @@ pub async fn bridge_to_leaf_route(
     version: &str,
 ) -> anyhow::Result<RouteDescriptor> {
     let country_key: Arc<str> = country.to_ascii_uppercase().into();
-    let blocked_iran = bridge.pool.contains("NOIR");
-    let is_iran = &*country_key == "IR" || (!blocked_iran && bridge.pool.contains("IR"));
+    let flavor = if &*country_key == "RU" {
+        ProtocolFlavor::Tls
+    } else {
+        ProtocolFlavor::Sosistab3
+    };
 
     // for cache coherence
     let mut bridge = bridge;
@@ -49,7 +51,7 @@ pub async fn bridge_to_leaf_route(
 
     static CACHE: LazyLock<
         Cache<
-            (BridgeDescriptor, SocketAddr, u32, Arc<str>),
+            (BridgeDescriptor, SocketAddr, u32, Arc<str>, u32),
             Result<RouteDescriptor, Arc<anyhow::Error>>,
         >,
     > = LazyLock::new(|| {
@@ -60,17 +62,19 @@ pub async fn bridge_to_leaf_route(
 
     CACHE
         .get_with(
-            (bridge.clone(), exit.b2e_listen, asn, country_key.clone()),
+            (
+                bridge.clone(),
+                exit.b2e_listen,
+                asn,
+                country_key.clone(),
+                delay_ms,
+            ),
             async {
                 if let Ok(version) = semver::Version::parse(version)
                     && VersionReq::parse(">=0.2.72").unwrap().matches(&version)
                     && bridge.pool.contains("meeklike")
                 {
-                    let fallback_protocol = if is_iran {
-                        stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Tls).await
-                    } else {
-                        stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Sosistab3).await
-                    };
+                    let fallback_protocol = stable_protocol(&bridge, exit.b2e_listen, flavor).await;
                     let fallback_route = bridge_to_leaf_route_inner(
                         bridge.clone(),
                         exit.b2e_listen,
@@ -96,61 +100,7 @@ pub async fn bridge_to_leaf_route(
                     });
                 }
 
-                // if asn == 4837 || asn == 4808 {
-                //     return anyhow::Ok(RouteDescriptor::Delay {
-                //         milliseconds: delay_ms,
-                //         lower: route.into(),
-                //     })
-                // } else
-                // } else if is_china_mobile_asn(asn) {
-                //     return anyhow::Ok(RouteDescriptor::Delay {
-                //         milliseconds: delay_ms,
-                //         lower: route.into(),
-                //     })
-                // } else
-                // if is_iran {
-                //     return anyhow::Ok(RouteDescriptor::Delay {
-                //         milliseconds: delay_ms,
-                //         lower: route.into(),
-                //     });
-                // }
-                let protocol = if asn == 4134 {
-                    stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Sosistab3).await
-                } else if country == "CN" {
-                    stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Tls).await
-                } else if country == "RU" {
-                    stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Tls).await
-                } else if !country.is_empty() {
-                    // anyhow::Ok(RouteDescriptor::Delay {
-                    //     milliseconds: delay_ms,
-                    //     lower: route.into(),
-                    // })
-                    stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Sosistab3).await
-                } else {
-                    let sosistab3_route = bridge_to_leaf_route_inner(
-                        bridge.clone(),
-                        exit.b2e_listen,
-                        stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Sosistab3).await,
-                    )
-                    .await?;
-                    let legacy_route = bridge_to_leaf_route_inner(
-                        bridge.clone(),
-                        exit.b2e_listen,
-                        stable_protocol(&bridge, exit.b2e_listen, ProtocolFlavor::Legacy).await,
-                    )
-                    .await?;
-                    return anyhow::Ok(RouteDescriptor::Delay {
-                        milliseconds: delay_ms,
-                        lower: RouteDescriptor::Fallback(vec![
-                            RouteDescriptor::Timeout {
-                                milliseconds: 5000,
-                                lower: sosistab3_route.into(),
-                            },
-                            legacy_route,
-                        ])
-                        .into(),
-                    });
-                };
+                let protocol = stable_protocol(&bridge, exit.b2e_listen, flavor).await;
 
                 let route =
                     bridge_to_leaf_route_inner(bridge.clone(), exit.b2e_listen, protocol).await?;
@@ -212,23 +162,23 @@ fn is_china_mobile_asn(asn: u32) -> bool {
 
 fn gencookie() -> String {
     let mut b = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng().fill_bytes(&mut b);
     hex::encode(b)
 }
 
 fn generate_protocol(flavor: ProtocolFlavor) -> ObfsProtocol {
     match flavor {
-        ProtocolFlavor::Tls => ObfsProtocol::ConnTest(
-            ObfsProtocol::Sosistab3New(
-                gencookie(),
-                ObfsProtocol::PlainTls(ObfsProtocol::None.into()).into(),
-            )
+        ProtocolFlavor::Tls => ObfsProtocol::Sosistab3New(
+            gencookie(),
+            ObfsProtocol::PlainTlsWithSni {
+                sni_domain: DEFAULT_TLS_SNI.into(),
+                lower: ObfsProtocol::None.into(),
+            }
             .into(),
         ),
-        ProtocolFlavor::Sosistab3 => ObfsProtocol::ConnTest(
-            ObfsProtocol::Sosistab3New(gencookie(), ObfsProtocol::None.into()).into(),
-        ),
-        ProtocolFlavor::Legacy => ObfsProtocol::Sosistab3(gencookie()),
+        ProtocolFlavor::Sosistab3 => {
+            ObfsProtocol::Sosistab3New(gencookie(), ObfsProtocol::None.into())
+        }
         ProtocolFlavor::Meeklike => {
             ObfsProtocol::Meeklike(gencookie(), Default::default(), ObfsProtocol::None.into())
         }
@@ -302,8 +252,12 @@ fn protocol_to_descriptor(protocol: ObfsProtocol, addr: SocketAddr) -> RouteDesc
             lower: protocol_to_descriptor(*obfs_protocol, addr).into(),
         },
         ObfsProtocol::PlainTls(obfs_protocol) => RouteDescriptor::PlainTls {
-            sni_domain: Some("lusheeta-toel.yandex.ru".into()),
+            sni_domain: Some(DEFAULT_TLS_SNI.into()),
             lower: protocol_to_descriptor(*obfs_protocol, addr).into(),
+        },
+        ObfsProtocol::PlainTlsWithSni { sni_domain, lower } => RouteDescriptor::PlainTls {
+            sni_domain: Some(sni_domain),
+            lower: protocol_to_descriptor(*lower, addr).into(),
         },
         ObfsProtocol::Sosistab3New(cookie, obfs_protocol) => RouteDescriptor::Sosistab3 {
             cookie,
@@ -317,5 +271,46 @@ fn protocol_to_descriptor(protocol: ObfsProtocol, addr: SocketAddr) -> RouteDesc
         ObfsProtocol::Hex(obfs_protocol) => RouteDescriptor::Hex {
             lower: protocol_to_descriptor(*obfs_protocol, addr).into(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_sni_comes_from_forwarding_metadata() {
+        let addr = "192.0.2.1:12345".parse().unwrap();
+        let protocol = ObfsProtocol::PlainTlsWithSni {
+            sni_domain: "custom.example.org".into(),
+            lower: ObfsProtocol::None.into(),
+        };
+        let RouteDescriptor::PlainTls { sni_domain, lower } =
+            protocol_to_descriptor(protocol, addr)
+        else {
+            panic!("expected TLS route");
+        };
+        assert_eq!(sni_domain.as_deref(), Some("custom.example.org"));
+        assert!(matches!(*lower, RouteDescriptor::Tcp(actual) if actual == addr));
+    }
+
+    #[test]
+    fn plain_sosistab3_route_has_no_connection_test() {
+        let addr = "192.0.2.1:12345".parse().unwrap();
+        let route = protocol_to_descriptor(generate_protocol(ProtocolFlavor::Sosistab3), addr);
+        let RouteDescriptor::Sosistab3 { lower, .. } = route else {
+            panic!("expected sosistab3 route");
+        };
+        assert!(matches!(*lower, RouteDescriptor::Tcp(actual) if actual == addr));
+    }
+
+    #[test]
+    fn broker_tls_stack_includes_its_server_name() {
+        let ObfsProtocol::Sosistab3New(_, lower) = generate_protocol(ProtocolFlavor::Tls) else {
+            panic!("expected sosistab3");
+        };
+        assert!(
+            matches!(*lower, ObfsProtocol::PlainTlsWithSni { sni_domain, .. } if sni_domain == DEFAULT_TLS_SNI)
+        );
     }
 }
