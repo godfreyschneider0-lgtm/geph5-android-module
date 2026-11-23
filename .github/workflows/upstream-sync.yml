@@ -135,7 +135,9 @@ jobs:
           ./apply-patches.sh --check upstream/ | tee /tmp/triage.txt
 
       - name: Open a tracking issue (series rejected)
-        if: steps.triage.outcome == 'failure'
+        # failure() must be explicit: a bare outcome check is ANDed with
+        # the implicit success(), so it would never fire once triage fails.
+        if: failure() && steps.triage.outcome == 'failure'
         env:
           NEW_BASE: ${{ steps.resolve.outputs.base }}
           TAG: ${{ steps.resolve.outputs.tag }}
@@ -175,7 +177,7 @@ jobs:
           Automated §5 step 3 (upstream-sync workflow)." "$NEW_BASE" 2>&1 | tee /tmp/merge.txt
 
       - name: Open a tracking issue (merge conflict)
-        if: steps.merge.outcome == 'failure'
+        if: failure() && steps.merge.outcome == 'failure'
         env:
           NEW_BASE: ${{ steps.resolve.outputs.base }}
           TAG: ${{ steps.resolve.outputs.tag }}
