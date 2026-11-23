@@ -285,6 +285,13 @@ exactly; it also validates the merged `Cargo.lock` via `--locked`. After a BASE
 bump the first run fails on the source hash — paste the `got: sha256-…` into
 `upstreamHash` in `flake.nix` (see `nix/README.md#updating`) and rebuild.
 
+The Android half needs an NDK plus `perl` and `make`: since 0.5.x the tree
+vendors openssl, and its `Configure`/`make` runs at build time. NDK r23+
+ships no per-triple binutils wrappers, so `android/build-module.sh` creates
+`aarch64-linux-android-ranlib`-style symlinks to the `llvm-*` tools under
+`upstream/target/ndk-shims/` and prepends them to PATH — see
+[README.md](README.md#build-requirements-geph5-05x).
+
 Optionally prove the series faithful (§7) before shipping. Artifacts land in
 `android/dist/geph5-ksu-<version>-{arm64,x64}.zip`.
 
@@ -389,6 +396,9 @@ including `upstream/Cargo.lock` — must match exactly.
 | `regenerate.sh` wants to downgrade dependencies | BASE was bumped without absorbing the base into the fork tip (§3 consequence 2) | do §5 step 3 first, then regenerate |
 | upstream renamed/moved a patched file | the `TARGETS` map and headers reference dead paths | update `TARGETS` + headers, fix the fork tree, regenerate |
 | patch 6 (`platform.rs`) rejects after a big upstream refactor | expected; that file is the designated fragile point | prefer re-derivation over hand-merging: resolve once in the fork merge, export via `regenerate.sh` |
+| `aarch64-linux-android-ranlib: not found` during the Android build | vendored openssl derives `RANLIB` from the target prefix; NDK r23+ has no such wrapper | `build-module.sh` already shims it into `upstream/target/ndk-shims/`; if you build by hand, add those symlinks or set `RANLIB_<target>` |
+| merge conflicts in `libraries/geph5-misc-rpc/Cargo.toml` only | upstream bumped `geph5-broker-protocol` / `sillad-meeklike` under our android `libc` table | keep their versions, keep our `[target.'cfg(target_os = "android")']` block |
+| modify/delete conflict on `build_and_upload.yml` / `main.yml` | they are upstream's CI and are deleted here on purpose (§1) | keep the deletion |
 
 ## 9. Companion documents
 

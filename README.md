@@ -47,6 +47,15 @@ nix build .#geph5                  # bin/geph5 + bin/geph5-client into ./result
 ./nix/build-nix.sh                 # one-shot: build + tarball into nix/dist/
 ```
 
+This flake is also the single source of the engine on the host it was developed
+on: `~/nixos` takes `packages.<system>.geph5` for both its system `geph5`
+instance and its `geph5f` side-by-side instance (`modules/geph5-fork.nix`).
+That makes this repo's sync cadence the host's upgrade path — after a sync,
+that flake's lock is refreshed with
+`nix flake update geph5-android-module` and a `nixos-rebuild` picks it up.
+The patches are inert on Linux unless `GEPH5_STATE_DIR` / `GEPH5_PAC_PORT` are
+set, so the default `geph5` instance behaves like stock upstream.
+
 ### Termux deb (install the desktop-built package)
 
 ```bash
@@ -70,6 +79,22 @@ build already packages the deb with the same cross binaries.)
 ./android/build-module.sh --skip-build     # repackage existing binaries
 ./android/build-module.sh --ndk /path/to/ndk
 ```
+
+### Build requirements (geph5 0.5.x)
+
+Beside the NDK (r27c is what CI uses), the host needs `perl` and `make` on
+PATH: 0.5.x vendors **openssl** for the bridge TLS work, and `openssl-sys`
+runs its `Configure`/`make` during the build.
+
+The NDK part has one trap. NDK r23+ dropped the per-triple binutils wrappers
+(there is only `llvm-ar`, `llvm-ranlib`, …), but openssl's `Configure` still
+derives `RANLIB` from the target prefix and calls
+`aarch64-linux-android-ranlib` at `install_dev`. `build-module.sh` therefore
+symlinks the triples to the `llvm-*` tools under
+`upstream/target/ndk-shims/<target>/` and puts that first in `PATH`, and also
+exports `RANLIB_/NM_/STRIP_/OBJCOPY_<target>`. If you ever see
+`ranlib: not found` bleeding out of an openssl build, that shim is the thing
+to look at — it is not an NDK version problem.
 
 ### Install (three ways)
 

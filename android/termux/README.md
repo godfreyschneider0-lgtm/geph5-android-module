@@ -25,12 +25,12 @@ produces both artifacts, the phone only ever *installs*:
 ```bash
 # desktop: one command, both artifacts per arch
 ./android/build-module.sh                # NDK cross-build
-#   android/dist/geph5-ksu-v0.4.2-arm64.zip     (root module)
-#   android/dist/geph5_0.4.2-1_aarch64.deb      (Termux, unprivileged)
+#   android/dist/geph5-ksu-v0.5.5-arm64.zip     (root module)
+#   android/dist/geph5_0.5.5-1_aarch64.deb      (Termux, unprivileged)
 
 # phone: install, no compilation
-adb push android/dist/geph5_0.4.2-1_aarch64.deb /data/local/tmp/
-# in Termux:  pkg install /data/local/tmp/geph5_0.4.2-1_aarch64.deb
+adb push android/dist/geph5_0.5.5-1_aarch64.deb /data/local/tmp/
+# in Termux:  pkg install /data/local/tmp/geph5_0.5.5-1_aarch64.deb
 ```
 
 The deb layout itself lives in `android/termux/pack-deb.sh`, shared by
