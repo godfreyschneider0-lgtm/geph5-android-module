@@ -37,6 +37,15 @@ Two trees matter and they are not the same thing:
   delta". `patches/regenerate.sh` *exports* the series from it. This is the
   source of truth for patch content; see §3 before your first sync.
 
+**Deliberate deletions from the fork tree.** Upstream's own CI is not ours:
+`.github/workflows/build_and_upload.yml` builds the musl client/bridge/exit/
+broker and `rclone`s them into upstream's Cloudflare R2 bucket, and
+`.github/workflows/main.yml` posts issue events to a Telegram chat. Both were
+inherited with the full-tree layout, are keyed to a `master` branch and to
+upstream's secrets, and have been deleted on purpose. If a sync ever reports a
+modify/delete conflict on either path, keep the deletion. The only workflow
+here is `upstream-sync.yml`.
+
 ## 2. Anatomy of the series
 
 Six patches carry the original Android support; three more (0007-0009)
