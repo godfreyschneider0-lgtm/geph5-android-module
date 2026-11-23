@@ -38,7 +38,7 @@
             upstreamRev = lib.strings.trim (builtins.readFile ./patches/BASE);
             # sha256 of the unpacked tarball at upstreamRev (codeload URL, see
             # nix/package.nix); update it when patches/BASE moves.
-            upstreamHash = "sha256-AFkf2RgH4xuGL1fEJbEzRiQBxciCQYmY4igY3xyYXlg=";
+            upstreamHash = "sha256-fwotRFvRXC5MBm5FFPVGano3xYYtL+xO5k1bAg9kvBw=";
           };
           default = self.packages.${system}.geph5;
         }

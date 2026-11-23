@@ -13,7 +13,7 @@ happened to the workspace and you should re-read this file rather than force it.
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/binaries/geph5-app/Cargo.toml b/binaries/geph5-app/Cargo.toml
-index 2a2a3be..23136f9 100644
+index e3c0bb0..1c4175c 100644
 --- a/binaries/geph5-app/Cargo.toml
 +++ b/binaries/geph5-app/Cargo.toml
 @@ -34,7 +34,7 @@ tracing = "0.1.44"
