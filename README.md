@@ -51,9 +51,9 @@ nix build .#geph5                  # bin/geph5 + bin/geph5-client into ./result
 
 ```bash
 # desktop already produced it alongside the zips:
-adb push android/dist/geph5_0.4.2-1_aarch64.deb /data/local/tmp/
+adb push android/dist/geph5_0.5.5-1_aarch64.deb /data/local/tmp/
 # in Termux (also install the Termux:Boot app once):
-pkg install /data/local/tmp/geph5_0.4.2-1_aarch64.deb
+pkg install /data/local/tmp/geph5_0.5.5-1_aarch64.deb
 gephsvc login && gephsvc connect         # socks5 127.0.0.1:9929, http 127.0.0.1:9930
 ```
 
@@ -78,7 +78,7 @@ build already packages the deb with the same cross binaries.)
 2. **One-shot ADB install** (auto-detects ksud / magisk / apd):
 
    ```bash
-   ./android/install.sh android/dist/geph5-ksu-v0.4.2-arm64.zip
+   ./android/install.sh android/dist/geph5-ksu-v0.5.5-arm64.zip
    ```
 
 3. **Magisk CLI**: `adb push ... /data/local/tmp/ && adb shell su -c 'magisk --install-module /data/local/tmp/geph5-ksu.zip'`
@@ -150,9 +150,9 @@ Full rationale, the patch ordering, and the operational traps are in
 ### Which version is this?
 
 A Geph *app* release is not a geph5 *crate* version. The current base is
-`patches/BASE` = `1f65e9e`, the geph5 commit behind Geph **5.9.1**, whose
-workspace version is `0.4.2` — so the module zip is named `v0.4.2` even though
-it ships Geph 5.9.1.
+`patches/BASE` = `cf2d90f`, geph5 `master` HEAD as of the Geph **5.9.3**
+release, whose workspace version is `0.5.5` — so the module zip is named
+`v0.5.5` even though it ships Geph 5.9.3.
 
 `patches/APP_VERSION` names the app release the series was last synced to.
 Upstream stopped tagging `gephgui-pkg` after `v5.9.1`; releases are now built

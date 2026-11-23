@@ -306,15 +306,15 @@ from something other than a released app build, say so and why in a note.
 | Date | App release | Base (`patches/BASE`) | Crate version | Module zip |
 |---|---|---|---|---|
 | 2026-10-06 | 5.9.1 (`gephgui-pkg` tag `v5.9.1`) | `1f65e9e` | 0.4.2 | `geph5-ksu-v0.4.2` |
+| 2026-11-23 | 5.9.3 (`dl.geph.io` `android-stable`, no public tag) | `cf2d90f` | 0.5.5 | `geph5-ksu-v0.5.5` |
 
-**Open item — 5.9.3 (released 2026-11-23).** Published binaries ship 0.5.5-era
-master code (`cf2d90f`, fingerprint in §5 step 0), while `patches/BASE` is
-still `1f65e9e` (0.4.2). `patches/APP_VERSION` names the app release the series
-was last synced to — `5.9.1` until that sync completes. Expect the 0.5.x merge
-to be the hard path: `client.rs` and `platform.rs` both moved a lot, the
-workspace moved to `edition = "2024"` and SQLx 0.9, and the Android app now
-talks to brokers that changed auth/SNI handling — a 0.4.2 module is not
-guaranteed to work against the 5.9.3-era network.
+**Note on 5.9.3** — the base came from geph5 `master` HEAD, not from a tag,
+because upstream stopped pushing tags after `v5.9.1` (fingerprint check in §5
+step 0). The merge conflicted only in `libraries/geph5-misc-rpc/Cargo.toml`
+(dependency version bumps); `patches/0001` and `patches/0007` needed nothing
+but fresh index/context lines. The workspace moved to `edition = "2024"` and
+SQLx 0.9 in this jump — that is the biggest upstream change the series has
+absorbed so far.
 
 ## 6. Changing the series itself
 

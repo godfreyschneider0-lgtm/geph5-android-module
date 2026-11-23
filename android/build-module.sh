@@ -133,6 +133,23 @@ build_one() {
   export "CARGO_TARGET_${TUVAR_UP}_LINKER=$LINKER"
   export "CC_${TUVAR}=$LINKER"
   export "AR_${TUVAR}=$TOOLBIN/llvm-ar"
+  export "RANLIB_${TUVAR}=$TOOLBIN/llvm-ranlib"
+  export "NM_${TUVAR}=$TOOLBIN/llvm-nm"
+  export "STRIP_${TUVAR}=$TOOLBIN/llvm-strip"
+  export "OBJCOPY_${TUVAR}=$TOOLBIN/llvm-objcopy"
+
+  # NDK r23+ no longer ships per-triple binutils wrappers; only the llvm-*
+  # tools. openssl's Configure still derives its RANLIB from the CC prefix
+  # ("aarch64-linux-android-ranlib") and geph5 0.5.x vendors openssl for the
+  # bridge TLS work, so its install_dev step dies with "ranlib: not found"
+  # unless the triples resolve. Symlink them and put the shim first in PATH.
+  SHIM="$WORKSPACE/target/ndk-shims/$TARGET"
+  mkdir -p "$SHIM"
+  for tool in ar ranlib nm objcopy strip; do
+    ln -sf "$TOOLBIN/llvm-$tool" "$SHIM/${TARGET}-$tool"
+    ln -sf "$TOOLBIN/llvm-$tool" "$SHIM/${TARGET}24-$tool"
+  done
+  export PATH="$SHIM:$PATH"
 
   RELDIR="$WORKSPACE/target/$TARGET/release"
   BIN_GEPH5="$RELDIR/geph5"

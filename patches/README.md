@@ -19,7 +19,7 @@ this repo is ours outright and is never patched onto anything:
 | `binaries/geph5-app/{Cargo.toml,src/{cli,client,platform,supervisor,manager}.rs}` | **patched** |
 | `libraries/geph5-misc-rpc/{Cargo.toml,src/manager_control.rs}` | **patched** |
 
-Current series: 9 patches, +171/−49 lines across 9 files. Each patch header
+Current series: 9 patches, +195/−49 lines across 9 files. Each patch header
 states what the change does, how fragile it is, and what it deliberately leaves
 unfixed.
 
@@ -28,8 +28,9 @@ unfixed.
 A Geph *app* version is not a geph5 *crate* version.
 
 - `patches/BASE` is the geph5 commit the series is written against — today
-  `1f65e9e`, the core behind app **5.9.1**, workspace version `0.4.2`.
-- `patches/APP_VERSION` is the app release that commit corresponds to.
+  `cf2d90f` (geph5 `master` HEAD at release time), workspace version `0.5.5`.
+- `patches/APP_VERSION` is the app release that commit corresponds to — today
+  **5.9.3**.
 
 Upstream's old rule ("the base is the submodule pin of the newest
 `gephgui-pkg` tag") no longer resolves anything: public tags stop at `v5.9.1`
